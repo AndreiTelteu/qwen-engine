@@ -1,3 +1,6 @@
 [submodule "llama-hip"]
 	path = llama-hip
 	url = https://github.com/ggml-org/llama.cpp.git
+[submodule "agent-evals/samples/laravel-users"]
+	path = agent-evals/samples/laravel-users
+	url = https://github.com/laravel/laravel.git
