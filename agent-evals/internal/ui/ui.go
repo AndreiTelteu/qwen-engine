@@ -20,47 +20,58 @@ import (
 )
 
 var (
-	ink         = lipgloss.Color("#E8EDF7")
-	muted       = lipgloss.Color("#72829E")
-	panel       = lipgloss.Color("#101827")
-	line        = lipgloss.Color("#23314A")
-	cyan        = lipgloss.Color("#48D6E5")
-	lime        = lipgloss.Color("#B7F34B")
-	amber       = lipgloss.Color("#FFB454")
-	red         = lipgloss.Color("#FF7189")
-	titleStyle  = lipgloss.NewStyle().Foreground(ink).Bold(true)
-	dimStyle    = lipgloss.NewStyle().Foreground(muted)
-	cyanStyle   = lipgloss.NewStyle().Foreground(cyan).Bold(true)
-	hotStyle    = lipgloss.NewStyle().Foreground(lime).Bold(true)
-	borderStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(line).Padding(0, 1)
+	ink          = lipgloss.Color("#E8EDF7")
+	muted        = lipgloss.Color("#72829E")
+	panel        = lipgloss.Color("#101827")
+	line         = lipgloss.Color("#23314A")
+	cyan         = lipgloss.Color("#48D6E5")
+	lime         = lipgloss.Color("#B7F34B")
+	amber        = lipgloss.Color("#FFB454")
+	red          = lipgloss.Color("#FF7189")
+	titleStyle   = lipgloss.NewStyle().Foreground(ink).Bold(true)
+	dimStyle     = lipgloss.NewStyle().Foreground(muted)
+	cyanStyle    = lipgloss.NewStyle().Foreground(cyan).Bold(true)
+	hotStyle     = lipgloss.NewStyle().Foreground(lime).Bold(true)
+	previewStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#60708B")).Italic(true)
+	borderStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(line).Padding(0, 1)
 )
 
+type logEntry struct {
+	At   time.Time
+	Text string
+}
+
 type model struct {
-	root          string
-	configPath    string
-	suite         config.Suite
-	environment   config.Environment
-	selected      int
-	width, height int
-	events        chan runner.Event
-	logs          []string
-	phase         string
-	active        bool
-	cancel        context.CancelFunc
-	metrics       proxy.Metrics
-	engineOnline  bool
-	err           string
+	root            string
+	configPath      string
+	suite           config.Suite
+	environment     config.Environment
+	selected        int
+	width, height   int
+	events          chan runner.Event
+	logs            []logEntry
+	answerPreview   string
+	thinkingPreview string
+	toolPreview     string
+	phase           string
+	active          bool
+	cancel          context.CancelFunc
+	metrics         proxy.Metrics
+	engineOnline    bool
+	err             string
 }
 
 type engineStatus bool
+type refreshTick time.Time
+type engineTick time.Time
 type editorDone struct{ err error }
 
 func New(root string, suite config.Suite, environment config.Environment) tea.Model {
-	return model{root: root, configPath: filepath.Join(root, "evals.toml"), suite: suite, environment: environment, events: make(chan runner.Event, 256), logs: []string{"Ready. Engine is manually controlled."}}
+	return model{root: root, configPath: filepath.Join(root, "evals.toml"), suite: suite, environment: environment, events: make(chan runner.Event, 256), logs: []logEntry{{At: time.Now(), Text: "Ready. Engine is manually controlled."}}}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.events), checkEngine(m.environment.Agent.BaseURL), tick())
+	return tea.Batch(waitEvent(m.events), checkEngine(m.environment.Agent.BaseURL), refresh(), refreshEngine())
 }
 
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -109,6 +120,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.metrics = *msg.Metrics
 		}
 		switch msg.Kind {
+		case "answer_preview":
+			m.answerPreview = msg.Detail
+		case "thinking_preview":
+			m.thinkingPreview = msg.Detail
+		case "tool":
+			m.toolPreview = msg.Detail
+			m.addLog(msg.Detail)
 		case "phase":
 			m.phase = msg.Detail
 			m.addLog(msg.Detail)
@@ -129,8 +147,10 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitEvent(m.events)
 	case engineStatus:
 		m.engineOnline = bool(msg)
-	case time.Time:
-		return m, tea.Batch(checkEngine(m.environment.Agent.BaseURL), tick())
+	case refreshTick:
+		return m, refresh()
+	case engineTick:
+		return m, tea.Batch(checkEngine(m.environment.Agent.BaseURL), refreshEngine())
 	case editorDone:
 		if msg.err != nil {
 			m.err = "editor: " + msg.err.Error()
@@ -156,6 +176,7 @@ func (m model) start(evaluations []config.Evaluation) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.active, m.err, m.phase, m.metrics = true, "", "Queued", proxy.Metrics{}
+	m.answerPreview, m.thinkingPreview, m.toolPreview = "", "", ""
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.addLog(fmt.Sprintf("Queued %d evaluation(s).", len(evaluations)))
@@ -200,10 +221,14 @@ func (m model) header() string {
 	if !m.engineOnline {
 		status = lipgloss.NewStyle().Foreground(amber).Bold(true).Render("ENGINE OFFLINE")
 	}
-	pp := dimStyle.Render(fmt.Sprintf("PROMPT  %6.1f tok/s", m.metrics.PromptPerSecond))
-	generation := hotStyle.Render(fmt.Sprintf("GENERATION  %6.1f TOK/S", m.metrics.GenerationPerSecond))
+	prompt := dimStyle.Render("PP FRESH  —")
+	if m.metrics.PromptMeasured {
+		prompt = dimStyle.Render(fmt.Sprintf("PP FRESH  %6.1f tok/s", m.metrics.PromptPerSecond))
+	}
+	cache := dimStyle.Render(fmt.Sprintf("CR  %3.0f%%", m.metrics.CacheRatio*100))
+	generation := hotStyle.Render(fmt.Sprintf("GEN 10S  %6.1f TOK/S", rollingGeneration(m.metrics.GenerationSamples, time.Now())))
 	left := titleStyle.Render("AGENT EVALS") + dimStyle.Render("  /  mission control")
-	right := status + "   " + pp + "   " + generation
+	right := status + "   " + prompt + "   " + cache + "   " + generation
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 2 {
 		gap = 2
@@ -265,22 +290,84 @@ func (m model) detailPanel() string {
 
 func (m model) logPanel() string {
 	width := max(76, m.width-2)
-	logs := m.logs
-	maxLines := max(4, m.height-25)
-	if len(logs) > maxLines {
-		logs = logs[len(logs)-maxLines:]
+	maxLines := max(4, m.height-29)
+	var lines []string
+	for _, preview := range []struct{ label, value string }{
+		{"answer", m.answerPreview},
+		{"thinking", m.thinkingPreview},
+		{"tool", m.toolPreview},
+	} {
+		if preview.value != "" {
+			lines = append(lines, previewStyle.Render(preview.label+"  "+truncate(preview.value, width-16)))
+		}
 	}
-	return borderStyle.Width(width - 2).Render(cyanStyle.Render("LIVE RUN LOG") + "\n" + strings.Join(logs, "\n"))
+	logs := m.logs
+	remaining := maxLines - len(lines)
+	if remaining < 1 {
+		remaining = 1
+	}
+	if len(logs) > remaining {
+		logs = logs[len(logs)-remaining:]
+	}
+	for _, entry := range logs {
+		line := entry.At.Format("15:04:05") + "  " + entry.Text
+		lines = append(lines, previewStyle.Render(truncate(line, width-6)))
+	}
+	return borderStyle.Width(width - 2).Render(cyanStyle.Render("LIVE RUN LOG") + "\n" + strings.Join(lines, "\n"))
 }
 
 func (m *model) addLog(line string) {
 	if strings.TrimSpace(line) == "" {
 		return
 	}
-	m.logs = append(m.logs, dimStyle.Render(time.Now().Format("15:04:05"))+"  "+line)
+	m.logs = append(m.logs, logEntry{At: time.Now(), Text: line})
 	if len(m.logs) > 150 {
 		m.logs = m.logs[len(m.logs)-150:]
 	}
+}
+
+const generationWindow = 10 * time.Second
+const generationGrace = 750 * time.Millisecond
+
+func rollingGeneration(samples []proxy.GenerationSample, now time.Time) float64 {
+	if len(samples) == 0 {
+		return 0
+	}
+	start := now.Add(-generationWindow)
+	if samples[0].At.After(start) {
+		start = samples[0].At
+	}
+	if !now.After(start) {
+		return samples[len(samples)-1].PerSecond
+	}
+	var weightedSeconds float64
+	for i, sample := range samples {
+		end := now
+		if i+1 < len(samples) && samples[i+1].At.Before(end) {
+			end = samples[i+1].At
+		}
+		stale := sample.At.Add(generationGrace)
+		if stale.Before(end) {
+			end = stale
+		}
+		segmentStart := sample.At
+		if start.After(segmentStart) {
+			segmentStart = start
+		}
+		if end.After(segmentStart) {
+			weightedSeconds += sample.PerSecond * end.Sub(segmentStart).Seconds()
+		}
+	}
+	return weightedSeconds / now.Sub(start).Seconds()
+}
+
+func truncate(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	characters := []rune(text)
+	if len(characters) <= limit {
+		return text
+	}
+	return string(characters[:limit-1]) + "…"
 }
 
 func (m model) editConfig() tea.Cmd {
@@ -318,7 +405,12 @@ func enabled(all []config.Evaluation) []config.Evaluation {
 	return result
 }
 func waitEvent(events <-chan runner.Event) tea.Cmd { return func() tea.Msg { return <-events } }
-func tick() tea.Cmd                                { return tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return t }) }
+func refresh() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return refreshTick(t) })
+}
+func refreshEngine() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return engineTick(t) })
+}
 func checkEngine(base string) tea.Cmd {
 	return func() tea.Msg { return engineStatus(engineHealth(base)) }
 }

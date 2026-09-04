@@ -31,9 +31,15 @@ type Runner struct {
 	Root string
 	Env  config.Environment
 	Emit func(Event)
+
+	previewMu sync.Mutex
+	previews  map[string]string
 }
 
-func (r Runner) Run(ctx context.Context, evaluation config.Evaluation) bool {
+func (r *Runner) Run(ctx context.Context, evaluation config.Evaluation) bool {
+	r.previewMu.Lock()
+	r.previews = make(map[string]string)
+	r.previewMu.Unlock()
 	emit := func(kind, detail string) {
 		r.Emit(Event{Kind: kind, EvalID: evaluation.ID, Title: evaluation.Title, Detail: detail})
 	}
@@ -102,7 +108,7 @@ func (r Runner) Run(ctx context.Context, evaluation config.Evaluation) bool {
 	return true
 }
 
-func (r Runner) prepare(ctx context.Context, evaluation config.Evaluation, emit func(string, string)) (string, error) {
+func (r *Runner) prepare(ctx context.Context, evaluation config.Evaluation, emit func(string, string)) (string, error) {
 	source := filepath.Join(r.Root, "samples", evaluation.Sample)
 	if _, err := os.Stat(filepath.Join(source, ".git")); err != nil {
 		return "", fmt.Errorf("sample %q is not a Git checkout at %s", evaluation.Sample, source)
@@ -126,12 +132,12 @@ func (r Runner) prepare(ctx context.Context, evaluation config.Evaluation, emit 
 	return workspace, nil
 }
 
-func (r Runner) commands(ctx context.Context, workspace string, commands []string, phase string, emit func(string, string)) error {
+func (r *Runner) commands(ctx context.Context, workspace string, commands []string, phase string, emit func(string, string)) error {
 	_, err := r.commandsOutput(ctx, workspace, commands, phase, emit)
 	return err
 }
 
-func (r Runner) commandsOutput(ctx context.Context, workspace string, commands []string, phase string, emit func(string, string)) (string, error) {
+func (r *Runner) commandsOutput(ctx context.Context, workspace string, commands []string, phase string, emit func(string, string)) (string, error) {
 	var output strings.Builder
 	for _, command := range commands {
 		emit("log", fmt.Sprintf("%s › %s", phase, command))
@@ -144,7 +150,7 @@ func (r Runner) commandsOutput(ctx context.Context, workspace string, commands [
 	return output.String(), nil
 }
 
-func (r Runner) runPi(ctx context.Context, workspace, evalID, stage string, provider config.Provider, overriddenBaseURL, prompt string, tools bool) (string, error) {
+func (r *Runner) runPi(ctx context.Context, workspace, evalID, stage string, provider config.Provider, overriddenBaseURL, prompt string, tools bool) (string, error) {
 	home := filepath.Join(r.Root, "results", evalID, "pi-"+stage)
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return "", err
@@ -205,11 +211,13 @@ func (r Runner) runPi(ctx context.Context, workspace, evalID, stage string, prov
 	return output.String(), nil
 }
 
-func (r Runner) emitPiEvent(evalID, line string) {
+func (r *Runner) emitPiEvent(evalID, line string) {
 	var event struct {
-		Type                  string `json:"type"`
-		ToolName              string `json:"toolName"`
-		IsError               bool   `json:"isError"`
+		Type                  string          `json:"type"`
+		ToolName              string          `json:"toolName"`
+		IsError               bool            `json:"isError"`
+		Args                  json.RawMessage `json:"args"`
+		Result                json.RawMessage `json:"result"`
 		AssistantMessageEvent struct {
 			Type  string `json:"type"`
 			Delta string `json:"delta"`
@@ -220,25 +228,93 @@ func (r Runner) emitPiEvent(evalID, line string) {
 	}
 	switch event.Type {
 	case "tool_execution_start":
-		r.Emit(Event{Kind: "log", EvalID: evalID, Detail: "tool › " + event.ToolName})
+		detail := "tool › " + event.ToolName
+		if args := compactJSON(event.Args, 120); args != "" {
+			detail += " · " + args
+		}
+		r.Emit(Event{Kind: "tool", EvalID: evalID, Detail: detail})
 	case "tool_execution_end":
 		detail := "tool ✓ " + event.ToolName
 		if event.IsError {
 			detail = "tool ! " + event.ToolName
 		}
-		r.Emit(Event{Kind: "log", EvalID: evalID, Detail: detail})
+		if result := compactJSON(event.Result, 100); result != "" {
+			detail += " · " + result
+		}
+		r.Emit(Event{Kind: "tool", EvalID: evalID, Detail: detail})
 	case "turn_start":
+		r.resetPreviews(evalID)
 		r.Emit(Event{Kind: "log", EvalID: evalID, Detail: "model turn started"})
 	case "turn_end":
 		r.Emit(Event{Kind: "log", EvalID: evalID, Detail: "model turn completed"})
 	case "message_update":
-		if event.AssistantMessageEvent.Type == "text_delta" && strings.TrimSpace(event.AssistantMessageEvent.Delta) != "" {
-			r.Emit(Event{Kind: "log", EvalID: evalID, Detail: "assistant streaming"})
+		switch event.AssistantMessageEvent.Type {
+		case "text_delta":
+			r.appendPreview(evalID, "answer", event.AssistantMessageEvent.Delta)
+		default:
+			kind := strings.ToLower(event.AssistantMessageEvent.Type)
+			if strings.Contains(kind, "think") || strings.Contains(kind, "reason") {
+				r.appendPreview(evalID, "thinking", event.AssistantMessageEvent.Delta)
+			}
 		}
 	}
 }
 
-func (r Runner) capture(ctx context.Context, directory, binary string, args ...string) (string, error) {
+func (r *Runner) resetPreviews(evalID string) {
+	r.previewMu.Lock()
+	defer r.previewMu.Unlock()
+	if r.previews == nil {
+		r.previews = make(map[string]string)
+	}
+	delete(r.previews, evalID+":answer")
+	delete(r.previews, evalID+":thinking")
+}
+
+func (r *Runner) appendPreview(evalID, kind, delta string) {
+	if strings.TrimSpace(delta) == "" {
+		return
+	}
+	key := evalID + ":" + kind
+	r.previewMu.Lock()
+	if r.previews == nil {
+		r.previews = make(map[string]string)
+	}
+	previous := r.previews[key]
+	current := previewText(previous+delta, 180)
+	if current == previous {
+		r.previewMu.Unlock()
+		return
+	}
+	r.previews[key] = current
+	r.previewMu.Unlock()
+	r.Emit(Event{Kind: kind + "_preview", EvalID: evalID, Detail: current})
+}
+
+func compactJSON(raw json.RawMessage, limit int) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return previewText(string(raw), limit)
+	}
+	compact, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return previewText(string(compact), limit)
+}
+
+func previewText(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	characters := []rune(text)
+	if len(characters) <= limit {
+		return text
+	}
+	return string(characters[:limit-1]) + "…"
+}
+
+func (r *Runner) capture(ctx context.Context, directory, binary string, args ...string) (string, error) {
 	command := exec.CommandContext(ctx, binary, args...)
 	command.Dir = directory
 	raw, err := command.CombinedOutput()
@@ -248,7 +324,7 @@ func (r Runner) capture(ctx context.Context, directory, binary string, args ...s
 	return string(raw), nil
 }
 
-func (r Runner) writeResult(evalID, name, body string) error {
+func (r *Runner) writeResult(evalID, name, body string) error {
 	dir := filepath.Join(r.Root, "results", evalID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err

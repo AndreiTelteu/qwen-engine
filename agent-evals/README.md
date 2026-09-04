@@ -57,3 +57,9 @@ judge_prompt = """Additional evaluation instructions for the independent judge."
 ## Live telemetry
 
 The TUI places a transparent local proxy between Pi and llama-hip for the coding-agent stage. It adds llama.cpp `return_progress` to streaming requests and reads server-sent `prompt_progress`, `gen_second`, and final timing data. Prompt throughput and **generation tok/s** therefore update while Pi performs tool loops, rather than only after the final response.
+
+### Metric semantics
+
+- **PP FRESH** is shown only when llama.cpp processes at least 16 non-cached prompt tokens. Cached prompt tokens are excluded, so a one-token cache continuation cannot appear as a misleading multi-thousand tok/s prefill result.
+- **CR** is the cache-reuse ratio for the current model request: cached prompt tokens divided by total prompt tokens.
+- **GEN 10S** is a rolling ten-second, time-weighted speed. It follows real slowdowns during generation and fades toward zero after generation stops instead of freezing on the final token speed.
