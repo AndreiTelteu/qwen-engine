@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/andreitelteu/qwen-engine/agent-evals/internal/config"
 	"github.com/andreitelteu/qwen-engine/agent-evals/internal/ui"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
@@ -26,7 +26,7 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
-	program := tea.NewProgram(ui.New(root, suite, environment), tea.WithAltScreen())
+	program := tea.NewProgram(ui.New(root, suite, environment))
 	if _, err := program.Run(); err != nil {
 		fatal(err)
 	}

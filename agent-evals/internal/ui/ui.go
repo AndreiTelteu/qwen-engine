@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/andreitelteu/qwen-engine/agent-evals/internal/config"
 	"github.com/andreitelteu/qwen-engine/agent-evals/internal/proxy"
@@ -67,7 +67,7 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.cancel != nil {
@@ -180,15 +180,19 @@ func (m model) start(evaluations []config.Evaluation) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
+func (m model) View() tea.View {
 	if m.width == 0 {
-		return "Loading Agent Evals…"
+		view := tea.NewView("Loading Agent Evals…")
+		view.AltScreen = true
+		return view
 	}
 	header := m.header()
 	content := lipgloss.JoinHorizontal(lipgloss.Top, m.listPanel(), m.detailPanel())
 	logPanel := m.logPanel()
 	footer := dimStyle.Render("  ↑/↓ select  •  enter/r run  •  a suite  •  e edit TOML  •  n new template  •  esc cancel  •  q quit")
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", content, "", logPanel, "", footer)
+	view := tea.NewView(lipgloss.JoinVertical(lipgloss.Left, header, "", content, "", logPanel, "", footer))
+	view.AltScreen = true
+	return view
 }
 
 func (m model) header() string {
