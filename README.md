@@ -7,7 +7,7 @@ Local Qwen inference and reproducible coding-agent evaluations on an RX 7900 XTX
 - `llama-hip/` — pinned upstream `llama.cpp` Git submodule, built with ROCm/HIP for `gfx1100`.
 - `start-llama-hip.sh` — the one foreground launcher for the local OpenAI-compatible server.
 - `scripts/` — model download, benchmark, rebuild, and explicit upstream update commands.
-- `agent-evals/` — the coding-agent evaluation TUI and its definitions (being added).
+- `agent-evals/` — the coding-agent evaluation TUI, TOML definitions, and isolated run machinery.
 - `artifacts/` — local logs and benchmark output, deliberately excluded from Git.
 
 ## Run the engine
@@ -41,3 +41,14 @@ CTX_SIZE=32768 ./start-llama-hip.sh
 ## Measured baseline
 
 At 32K context, MTP draft depth 2 measured 45.92 decode tok/s with 60.04% draft acceptance. The same setup served 128K capacity at 44.13 decode tok/s. Historical local output is under `artifacts/llama-hip/`.
+
+## Agent evaluations
+
+Start the inference engine in one terminal, then run the evaluation cockpit in another:
+
+```bash
+./start-llama-hip.sh
+cd agent-evals && cp .env.example .env && $EDITOR .env && ./run.sh
+```
+
+See [`agent-evals/README.md`](agent-evals/README.md) for TOML authoring, sample submodules, isolated worktrees, and live server telemetry.

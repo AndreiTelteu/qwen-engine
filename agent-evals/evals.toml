@@ -1,0 +1,32 @@
+# One [[eval]] block is one repeatable coding task.
+# `sample` is a directory below samples/ and should be a Git submodule.
+
+[[eval]]
+id = "laravel-add-user-filter"
+title = "Laravel · user status filter"
+sample = "laravel-users"
+timeout = "15m"
+
+agent_prompt = """
+Add a status filter to the users index page. Preserve existing query parameters,
+cover the behavior with an automated test, and run the relevant checks.
+"""
+
+expected = """
+The users index accepts and preserves a valid status filter. The implementation
+has focused tests, follows project conventions, and does not make unrelated changes.
+"""
+
+setup = [
+  "composer install --no-interaction --prefer-dist",
+]
+
+verify = [
+  "php artisan test --filter=UserFilterTest",
+  "vendor/bin/pint --test",
+]
+
+judge_prompt = """
+Assess the implementation against the expected outcome. Prioritize correctness,
+test evidence, regression risk, and scope discipline.
+"""
