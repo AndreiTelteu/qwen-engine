@@ -1,0 +1,3 @@
+[submodule "llama-hip"]
+	path = llama-hip
+	url = https://github.com/ggml-org/llama.cpp.git

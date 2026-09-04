@@ -1,0 +1,15 @@
+# Secrets and machine-local state
+.env
+.env.*
+!.env.example
+
+# Generated engine and benchmark artefacts
+artifacts/
+llama-hip/build-*/
+llama-hip/models/qwen3.8-27b-q4_0/
+
+# Agent-evals runtime state
+agent-evals/bin/
+agent-evals/runs/
+agent-evals/results/
+agent-evals/.cache/
