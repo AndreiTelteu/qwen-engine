@@ -16,10 +16,11 @@ Local Qwen inference and reproducible coding-agent evaluations on an RX 7900 XTX
 ./start-llama-hip.sh
 ```
 
-Defaults: Qwen3.8-27B Q4_0 + its MTP draft model, ROCm0, 128K context, Q8 KV cache, draft depth 2, reasoning off, and `127.0.0.1:8080`.
+Defaults: Qwen3.8-27B Q4_0 + its MTP draft model, ROCm0, 128K context, Q8 KV cache, draft depth 2, reasoning auto, and `127.0.0.1:8080`.
 
 ```bash
-REASONING=auto ./start-llama-hip.sh
+# Disable thinking only when maximum throughput matters more than quality.
+REASONING=off ./start-llama-hip.sh
 CTX_SIZE=32768 ./start-llama-hip.sh
 ```
 

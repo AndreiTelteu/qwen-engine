@@ -11,7 +11,7 @@ SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 : "${CTX_SIZE:=131072}"
 : "${SPEC_DRAFT_N_MAX:=2}"
 : "${PORT:=8080}"
-: "${REASONING:=off}"
+: "${REASONING:=auto}"
 : "${VERBOSITY:=3}"
 
 for required in "$SERVER" "$MODEL" "$DRAFT"; do
