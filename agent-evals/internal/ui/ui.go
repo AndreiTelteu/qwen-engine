@@ -35,32 +35,32 @@ var (
 )
 
 type logEntry struct {
-	At   time.Time
-	Text string
+	At    time.Time
+	Text  string
+	Key   string
+	Epoch int
 }
 
 type model struct {
-	root            string
-	configPath      string
-	suite           config.Suite
-	environment     config.Environment
-	selected        int
-	width, height   int
-	events          chan runner.Event
-	engineEvents    chan engine.Event
-	engineManager   *engine.Manager
-	engineStop      context.CancelFunc
-	engineContext   context.Context
-	logs            []logEntry
-	answerPreview   string
-	thinkingPreview string
-	toolPreview     string
-	phase           string
-	active          bool
-	cancel          context.CancelFunc
-	metrics         engine.Metrics
-	engineOnline    bool
-	err             string
+	root          string
+	configPath    string
+	suite         config.Suite
+	environment   config.Environment
+	selected      int
+	width, height int
+	events        chan runner.Event
+	engineEvents  chan engine.Event
+	engineManager *engine.Manager
+	engineStop    context.CancelFunc
+	engineContext context.Context
+	logs          []logEntry
+	previewEpoch  int
+	phase         string
+	active        bool
+	cancel        context.CancelFunc
+	metrics       engine.Metrics
+	engineOnline  bool
+	err           string
 }
 
 type engineStatus bool
@@ -126,11 +126,13 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case runner.Event:
 		switch msg.Kind {
 		case "answer_preview":
-			m.answerPreview = msg.Detail
+			m.updatePreview("answer", msg.Detail)
 		case "thinking_preview":
-			m.thinkingPreview = msg.Detail
+			m.updatePreview("thinking", msg.Detail)
+		case "turn":
+			m.previewEpoch++
+			m.addLog(msg.Detail)
 		case "tool":
-			m.toolPreview = msg.Detail
 			m.addLog(msg.Detail)
 		case "phase":
 			m.phase = msg.Detail
@@ -203,7 +205,7 @@ func (m model) start(evaluations []config.Evaluation) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.active, m.err, m.phase, m.metrics = true, "", "Queued", engine.Metrics{}
-	m.answerPreview, m.thinkingPreview, m.toolPreview = "", "", ""
+	m.previewEpoch++
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	m.addLog(fmt.Sprintf("Queued %d evaluation(s).", len(evaluations)))
@@ -321,25 +323,12 @@ func (m model) detailPanel() string {
 
 func (m model) logPanel() string {
 	width := max(76, m.width-2)
-	maxLines := max(4, m.height-29)
-	var lines []string
-	for _, preview := range []struct{ label, value string }{
-		{"answer", m.answerPreview},
-		{"thinking", m.thinkingPreview},
-		{"tool", m.toolPreview},
-	} {
-		if preview.value != "" {
-			lines = append(lines, previewStyle.Render(preview.label+"  "+truncate(preview.value, width-16)))
-		}
-	}
+	maxLines := max(4, m.height-26)
 	logs := m.logs
-	remaining := maxLines - len(lines)
-	if remaining < 1 {
-		remaining = 1
+	if len(logs) > maxLines {
+		logs = logs[len(logs)-maxLines:]
 	}
-	if len(logs) > remaining {
-		logs = logs[len(logs)-remaining:]
-	}
+	lines := make([]string, 0, len(logs))
 	for _, entry := range logs {
 		line := entry.At.Format("15:04:05") + "  " + entry.Text
 		lines = append(lines, previewStyle.Render(truncate(line, width-6)))
@@ -352,6 +341,21 @@ func (m *model) addLog(line string) {
 		return
 	}
 	m.logs = append(m.logs, logEntry{At: time.Now(), Text: line})
+	if len(m.logs) > 150 {
+		m.logs = m.logs[len(m.logs)-150:]
+	}
+}
+
+func (m *model) updatePreview(kind, value string) {
+	text := kind + " · " + value
+	for index := len(m.logs) - 1; index >= 0; index-- {
+		entry := &m.logs[index]
+		if entry.Key == kind && entry.Epoch == m.previewEpoch {
+			entry.At, entry.Text = time.Now(), text
+			return
+		}
+	}
+	m.logs = append(m.logs, logEntry{At: time.Now(), Text: text, Key: kind, Epoch: m.previewEpoch})
 	if len(m.logs) > 150 {
 		m.logs = m.logs[len(m.logs)-150:]
 	}

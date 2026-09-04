@@ -231,7 +231,7 @@ func (r *Runner) emitPiEvent(evalID, line string) {
 		r.Emit(Event{Kind: "tool", EvalID: evalID, Detail: detail})
 	case "turn_start":
 		r.resetPreviews(evalID)
-		r.Emit(Event{Kind: "log", EvalID: evalID, Detail: "model turn started"})
+		r.Emit(Event{Kind: "turn", EvalID: evalID, Detail: "model turn started"})
 	case "turn_end":
 		r.Emit(Event{Kind: "log", EvalID: evalID, Detail: "model turn completed"})
 	case "message_update":
@@ -267,7 +267,7 @@ func (r *Runner) appendPreview(evalID, kind, delta string) {
 		r.previews = make(map[string]string)
 	}
 	previous := r.previews[key]
-	current := previewText(previous+delta, 180)
+	current := tailPreviewText(previous+delta, 180)
 	if current == previous {
 		r.previewMu.Unlock()
 		return
@@ -299,6 +299,15 @@ func previewText(text string, limit int) string {
 		return text
 	}
 	return string(characters[:limit-1]) + "…"
+}
+
+func tailPreviewText(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	characters := []rune(text)
+	if len(characters) <= limit {
+		return text
+	}
+	return "…" + string(characters[len(characters)-limit+1:])
 }
 
 func (r *Runner) capture(ctx context.Context, directory, binary string, args ...string) (string, error) {

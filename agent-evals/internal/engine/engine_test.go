@@ -46,3 +46,20 @@ func TestParserReadsLivePromptRateAndClearsGenerationWhenTaskEnds(t *testing.T) 
 		t.Fatalf("release metric: %#v", metric)
 	}
 }
+
+func TestParserKeepsCacheRatioUntilTheNextTaskReportsCacheState(t *testing.T) {
+	parser := NewParser()
+	parser.metrics.CacheRatio = .82
+	metric, changed, _ := parser.Parse("27.00.475.575 I slot launch_slot_: id 0 | task 4381 | processing task, is_child = 0")
+	if !changed || metric.CacheRatio != .82 {
+		t.Fatalf("new task lost previous CR: %#v", metric)
+	}
+	metric, changed, _ = parser.Parse("27.00.476.000 D slot update: id 0 | task 4381 | cached n_tokens = 0, memory_seq_rm [0, end)")
+	if changed {
+		t.Fatal("cache state alone must wait for fresh prompt total")
+	}
+	metric, changed, _ = parser.Parse("27.04.850.239 I slot print_timing: id 0 | task 4381 | prompt processing, n_tokens = 2491, progress = 1.00, t = 3.60 s / 692.32 tokens per second")
+	if !changed || metric.CacheRatio != 0 {
+		t.Fatalf("confirmed cache miss should set CR to zero: %#v", metric)
+	}
+}

@@ -156,7 +156,11 @@ func Healthy(baseURL string) bool {
 	return response.StatusCode >= 200 && response.StatusCode < 300
 }
 
-type taskState struct{ cached, fresh int }
+type taskState struct {
+	cached     int
+	fresh      int
+	cacheKnown bool
+}
 type Parser struct {
 	tasks   map[int]taskState
 	metrics Metrics
@@ -177,13 +181,15 @@ func (p *Parser) Parse(line string) (Metrics, bool, string) {
 	task, hasTask := parseTask(line)
 	now := time.Now()
 	if hasTask && strings.Contains(line, "processing task") {
-		p.metrics = Metrics{TaskID: task}
+		// Cache reuse is only known after llama.cpp emits its cached-token debug line.
+		// Keep the previous CR visible in the small gap before that authoritative value arrives.
+		p.metrics = Metrics{TaskID: task, CacheRatio: p.metrics.CacheRatio}
 		return p.snapshot(now), true, fmt.Sprintf("engine task %d started", task)
 	}
 	if hasTask && cachedPattern.MatchString(line) {
 		cached, _ := parseInt(cachedPattern.FindStringSubmatch(line)[1])
 		state := p.tasks[task]
-		state.cached = cached
+		state.cached, state.cacheKnown = cached, true
 		p.tasks[task] = state
 		return p.snapshot(now), false, ""
 	}
@@ -198,9 +204,11 @@ func (p *Parser) Parse(line string) (Metrics, bool, string) {
 		state.fresh = tokens
 		p.tasks[task] = state
 		p.metrics.TaskID, p.metrics.FreshPromptTokens, p.metrics.CachedPromptTokens, p.metrics.PromptPerSecond = task, tokens, state.cached, perSecond
-		total := tokens + state.cached
-		if total > 0 {
-			p.metrics.CacheRatio = float64(state.cached) / float64(total)
+		if state.cacheKnown {
+			total := tokens + state.cached
+			if total > 0 {
+				p.metrics.CacheRatio = float64(state.cached) / float64(total)
+			}
 		}
 		return p.snapshot(now), true, fmt.Sprintf("task %d · PP %.1f tok/s · CR %.0f%%", task, perSecond, p.metrics.CacheRatio*100)
 	}
