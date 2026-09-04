@@ -250,16 +250,16 @@ func (m model) header() string {
 	if !m.engineOnline {
 		status = lipgloss.NewStyle().Foreground(amber).Bold(true).Render("ENGINE LOADING")
 	}
-	prompt := dimStyle.Render("PP  —")
+	prompt := metric("PP", "—", dimStyle)
 	if m.metrics.PromptPerSecond > 0 {
-		prompt = dimStyle.Render(fmt.Sprintf("PP  %6.1f tok/s", m.metrics.PromptPerSecond))
+		prompt = metric("PP", fmt.Sprintf("%6.1f tok/s", m.metrics.PromptPerSecond), dimStyle)
 	}
-	cache := dimStyle.Render(fmt.Sprintf("CR  %3.0f%%", m.metrics.CacheRatio*100))
-	draft := dimStyle.Render("DA  —")
+	cache := metric("CR", fmt.Sprintf("%3.0f%%", m.metrics.CacheRatio*100), dimStyle)
+	draft := metric("MTP", "—", dimStyle)
 	if m.metrics.DraftGenerated > 0 {
-		draft = dimStyle.Render(fmt.Sprintf("DA  %3.0f%%", m.metrics.DraftAcceptance*100))
+		draft = metric("MTP", fmt.Sprintf("%3.0f%%", m.metrics.DraftAcceptance*100), dimStyle)
 	}
-	generation := hotStyle.Render(fmt.Sprintf("GEN 3S  %6.1f TOK/S", m.metrics.GenerationPerSecond))
+	generation := metric("GEN 3S", fmt.Sprintf("%6.1f TOK/S", m.metrics.GenerationPerSecond), hotStyle)
 	left := titleStyle.Render("AGENT EVALS") + dimStyle.Render("  /  mission control")
 	right := status + "   " + prompt + "   " + cache + "   " + draft + "   " + generation
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -267,6 +267,10 @@ func (m model) header() string {
 		gap = 2
 	}
 	return lipgloss.NewStyle().Foreground(panel).Background(panel).Padding(0, 1).Render(left + strings.Repeat(" ", gap) + right)
+}
+
+func metric(label, value string, valueStyle lipgloss.Style) string {
+	return titleStyle.Render(label) + valueStyle.Render("  "+value)
 }
 
 func (m model) listPanel() string {
@@ -330,10 +334,36 @@ func (m model) logPanel() string {
 	}
 	lines := make([]string, 0, len(logs))
 	for _, entry := range logs {
-		line := entry.At.Format("15:04:05") + "  " + entry.Text
-		lines = append(lines, previewStyle.Render(truncate(line, width-6)))
+		lines = append(lines, renderLog(entry, width-6))
 	}
 	return borderStyle.Width(width - 2).Render(cyanStyle.Render("LIVE RUN LOG") + "\n" + strings.Join(lines, "\n"))
+}
+
+func renderLog(entry logEntry, width int) string {
+	text := entry.Text
+	if entry.Key == "answer" || entry.Key == "thinking" {
+		text = tailTruncate(text, width-11)
+	} else {
+		text = truncate(text, width-11)
+	}
+	label, rest := splitLogType(text)
+	styledRest := previewStyle.Render(rest)
+	for _, metricLabel := range []string{"PP", "CR", "MTP"} {
+		styledRest = strings.ReplaceAll(styledRest, metricLabel, titleStyle.Render(metricLabel))
+	}
+	return dimStyle.Render(entry.At.Format("15:04:05")+"  ") + titleStyle.Render(label) + styledRest
+}
+
+func splitLogType(text string) (string, string) {
+	for _, label := range []string{"engine", "task", "tool", "thinking", "answer"} {
+		if text == label {
+			return label, ""
+		}
+		if strings.HasPrefix(text, label+" ") {
+			return label, text[len(label):]
+		}
+	}
+	return "log", "  " + text
 }
 
 func (m *model) addLog(line string) {
@@ -368,6 +398,15 @@ func truncate(text string, limit int) string {
 		return text
 	}
 	return string(characters[:limit-1]) + "…"
+}
+
+func tailTruncate(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	characters := []rune(text)
+	if len(characters) <= limit {
+		return text
+	}
+	return "…" + string(characters[len(characters)-limit+1:])
 }
 
 func (m model) editConfig() tea.Cmd {
