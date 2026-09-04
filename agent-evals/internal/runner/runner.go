@@ -16,15 +16,13 @@ import (
 	"time"
 
 	"github.com/andreitelteu/qwen-engine/agent-evals/internal/config"
-	"github.com/andreitelteu/qwen-engine/agent-evals/internal/proxy"
 )
 
 type Event struct {
-	Kind    string
-	EvalID  string
-	Title   string
-	Detail  string
-	Metrics *proxy.Metrics
+	Kind   string
+	EvalID string
+	Title  string
+	Detail string
 }
 
 type Runner struct {
@@ -60,16 +58,8 @@ func (r *Runner) Run(ctx context.Context, evaluation config.Evaluation) bool {
 		return false
 	}
 
-	emit("phase", "Running coding agent through metrics proxy")
-	metricProxy, err := proxy.Start(r.Env.Agent.BaseURL, func(metrics proxy.Metrics) {
-		r.Emit(Event{Kind: "metrics", EvalID: evaluation.ID, Metrics: &metrics})
-	})
-	if err != nil {
-		emit("failed", err.Error())
-		return false
-	}
-	agentOutput, err := r.runPi(ctx, workspace, evaluation.ID, "agent", r.Env.Agent, metricProxy.URL(), evaluation.AgentPrompt, true)
-	_ = metricProxy.Close()
+	emit("phase", "Running coding agent; telemetry comes from managed llama-hip logs")
+	agentOutput, err := r.runPi(ctx, workspace, evaluation.ID, "agent", r.Env.Agent, evaluation.AgentPrompt, true)
 	if err != nil {
 		emit("failed", fmt.Sprintf("agent: %v", err))
 		return false
@@ -94,7 +84,7 @@ func (r *Runner) Run(ctx context.Context, evaluation config.Evaluation) bool {
 
 	emit("phase", "Running independent judge")
 	judgeTask := judgePrompt(evaluation, diff, verifyOutput, verifyErr)
-	judgeOutput, err := r.runPi(ctx, workspace, evaluation.ID, "judge", r.Env.Judge, "", judgeTask, false)
+	judgeOutput, err := r.runPi(ctx, workspace, evaluation.ID, "judge", r.Env.Judge, judgeTask, false)
 	if err != nil {
 		emit("failed", fmt.Sprintf("judge: %v", err))
 		return false
@@ -150,13 +140,10 @@ func (r *Runner) commandsOutput(ctx context.Context, workspace string, commands 
 	return output.String(), nil
 }
 
-func (r *Runner) runPi(ctx context.Context, workspace, evalID, stage string, provider config.Provider, overriddenBaseURL, prompt string, tools bool) (string, error) {
+func (r *Runner) runPi(ctx context.Context, workspace, evalID, stage string, provider config.Provider, prompt string, tools bool) (string, error) {
 	home := filepath.Join(r.Root, "results", evalID, "pi-"+stage)
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		return "", err
-	}
-	if overriddenBaseURL != "" {
-		provider.BaseURL = overriddenBaseURL
 	}
 	if err := writeModels(home, provider); err != nil {
 		return "", err

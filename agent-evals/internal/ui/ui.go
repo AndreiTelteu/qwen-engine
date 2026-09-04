@@ -3,8 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,7 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/andreitelteu/qwen-engine/agent-evals/internal/config"
-	"github.com/andreitelteu/qwen-engine/agent-evals/internal/proxy"
+	"github.com/andreitelteu/qwen-engine/agent-evals/internal/engine"
 	"github.com/andreitelteu/qwen-engine/agent-evals/internal/runner"
 )
 
@@ -49,6 +47,10 @@ type model struct {
 	selected        int
 	width, height   int
 	events          chan runner.Event
+	engineEvents    chan engine.Event
+	engineManager   *engine.Manager
+	engineStop      context.CancelFunc
+	engineContext   context.Context
 	logs            []logEntry
 	answerPreview   string
 	thinkingPreview string
@@ -56,7 +58,7 @@ type model struct {
 	phase           string
 	active          bool
 	cancel          context.CancelFunc
-	metrics         proxy.Metrics
+	metrics         engine.Metrics
 	engineOnline    bool
 	err             string
 }
@@ -67,11 +69,15 @@ type engineTick time.Time
 type editorDone struct{ err error }
 
 func New(root string, suite config.Suite, environment config.Environment) tea.Model {
-	return model{root: root, configPath: filepath.Join(root, "evals.toml"), suite: suite, environment: environment, events: make(chan runner.Event, 256), logs: []logEntry{{At: time.Now(), Text: "Ready. Engine is manually controlled."}}}
+	engineEvents := make(chan engine.Event, 256)
+	engineContext, engineStop := context.WithCancel(context.Background())
+	manager := engine.New(filepath.Dir(root), environment.Agent.BaseURL, func(event engine.Event) { engineEvents <- event })
+	return model{root: root, configPath: filepath.Join(root, "evals.toml"), suite: suite, environment: environment, events: make(chan runner.Event, 256), engineEvents: engineEvents, engineManager: manager, engineStop: engineStop, logs: []logEntry{{At: time.Now(), Text: "Starting managed llama-hip."}}, engineContext: engineContext}
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEvent(m.events), checkEngine(m.environment.Agent.BaseURL), refresh(), refreshEngine())
+	go m.engineManager.Start(m.engineContext)
+	return tea.Batch(waitEvent(m.events), waitEngine(m.engineEvents), checkEngine(m.environment.Agent.BaseURL), refresh(), refreshEngine())
 }
 
 func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
@@ -84,6 +90,8 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			if m.cancel != nil {
 				m.cancel()
 			}
+			m.engineStop()
+			m.engineManager.Stop()
 			return m, tea.Quit
 		case "up", "k":
 			if !m.active && m.selected > 0 {
@@ -116,9 +124,6 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case runner.Event:
-		if msg.Metrics != nil {
-			m.metrics = *msg.Metrics
-		}
 		switch msg.Kind {
 		case "answer_preview":
 			m.answerPreview = msg.Detail
@@ -145,6 +150,28 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLog(msg.Detail)
 		}
 		return m, waitEvent(m.events)
+	case engine.Event:
+		if msg.Metrics != nil {
+			m.metrics = *msg.Metrics
+		}
+		switch msg.Kind {
+		case "starting":
+			m.phase = "Loading managed llama-hip"
+			m.addLog(msg.Detail)
+		case "external":
+			m.engineOnline = true
+			m.addLog(msg.Detail)
+		case "engine-log":
+			m.addLog(msg.Detail)
+		case "failed":
+			m.engineOnline = false
+			m.err = msg.Detail
+			m.addLog("ENGINE FAILED · " + msg.Detail)
+		case "stopped":
+			m.engineOnline = false
+			m.addLog(msg.Detail)
+		}
+		return m, waitEngine(m.engineEvents)
 	case engineStatus:
 		m.engineOnline = bool(msg)
 	case refreshTick:
@@ -175,7 +202,7 @@ func (m model) start(evaluations []config.Evaluation) (tea.Model, tea.Cmd) {
 		m.err = "No enabled evaluations."
 		return m, nil
 	}
-	m.active, m.err, m.phase, m.metrics = true, "", "Queued", proxy.Metrics{}
+	m.active, m.err, m.phase, m.metrics = true, "", "Queued", engine.Metrics{}
 	m.answerPreview, m.thinkingPreview, m.toolPreview = "", "", ""
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
@@ -219,16 +246,20 @@ func (m model) View() tea.View {
 func (m model) header() string {
 	status := hotStyle.Render("ENGINE ONLINE")
 	if !m.engineOnline {
-		status = lipgloss.NewStyle().Foreground(amber).Bold(true).Render("ENGINE OFFLINE")
+		status = lipgloss.NewStyle().Foreground(amber).Bold(true).Render("ENGINE LOADING")
 	}
-	prompt := dimStyle.Render("PP FRESH  —")
-	if m.metrics.PromptMeasured {
-		prompt = dimStyle.Render(fmt.Sprintf("PP FRESH  %6.1f tok/s", m.metrics.PromptPerSecond))
+	prompt := dimStyle.Render("PP  —")
+	if m.metrics.PromptPerSecond > 0 {
+		prompt = dimStyle.Render(fmt.Sprintf("PP  %6.1f tok/s", m.metrics.PromptPerSecond))
 	}
 	cache := dimStyle.Render(fmt.Sprintf("CR  %3.0f%%", m.metrics.CacheRatio*100))
-	generation := hotStyle.Render(fmt.Sprintf("GEN 10S  %6.1f TOK/S", rollingGeneration(m.metrics.GenerationSamples, time.Now())))
+	draft := dimStyle.Render("DA  —")
+	if m.metrics.DraftGenerated > 0 {
+		draft = dimStyle.Render(fmt.Sprintf("DA  %3.0f%%", m.metrics.DraftAcceptance*100))
+	}
+	generation := hotStyle.Render(fmt.Sprintf("GEN 3S  %6.1f TOK/S", m.metrics.GenerationPerSecond))
 	left := titleStyle.Render("AGENT EVALS") + dimStyle.Render("  /  mission control")
-	right := status + "   " + prompt + "   " + cache + "   " + generation
+	right := status + "   " + prompt + "   " + cache + "   " + draft + "   " + generation
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 2 {
 		gap = 2
@@ -326,41 +357,6 @@ func (m *model) addLog(line string) {
 	}
 }
 
-const generationWindow = 10 * time.Second
-const generationGrace = 750 * time.Millisecond
-
-func rollingGeneration(samples []proxy.GenerationSample, now time.Time) float64 {
-	if len(samples) == 0 {
-		return 0
-	}
-	start := now.Add(-generationWindow)
-	if samples[0].At.After(start) {
-		start = samples[0].At
-	}
-	if !now.After(start) {
-		return samples[len(samples)-1].PerSecond
-	}
-	var weightedSeconds float64
-	for i, sample := range samples {
-		end := now
-		if i+1 < len(samples) && samples[i+1].At.Before(end) {
-			end = samples[i+1].At
-		}
-		stale := sample.At.Add(generationGrace)
-		if stale.Before(end) {
-			end = stale
-		}
-		segmentStart := sample.At
-		if start.After(segmentStart) {
-			segmentStart = start
-		}
-		if end.After(segmentStart) {
-			weightedSeconds += sample.PerSecond * end.Sub(segmentStart).Seconds()
-		}
-	}
-	return weightedSeconds / now.Sub(start).Seconds()
-}
-
 func truncate(text string, limit int) string {
 	text = strings.Join(strings.Fields(text), " ")
 	characters := []rune(text)
@@ -404,7 +400,8 @@ func enabled(all []config.Evaluation) []config.Evaluation {
 	}
 	return result
 }
-func waitEvent(events <-chan runner.Event) tea.Cmd { return func() tea.Msg { return <-events } }
+func waitEvent(events <-chan runner.Event) tea.Cmd  { return func() tea.Msg { return <-events } }
+func waitEngine(events <-chan engine.Event) tea.Cmd { return func() tea.Msg { return <-events } }
 func refresh() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return refreshTick(t) })
 }
@@ -414,20 +411,8 @@ func refreshEngine() tea.Cmd {
 func checkEngine(base string) tea.Cmd {
 	return func() tea.Msg { return engineStatus(engineHealth(base)) }
 }
-func engineHealth(base string) bool {
-	target, err := url.Parse(base)
-	if err != nil {
-		return false
-	}
-	target.Path = "/health"
-	target.RawQuery = ""
-	response, err := (&http.Client{Timeout: time.Second}).Get(target.String())
-	if err != nil {
-		return false
-	}
-	defer response.Body.Close()
-	return response.StatusCode >= 200 && response.StatusCode < 300
-}
+func engineHealth(base string) bool { return engine.Healthy(base) }
+
 func withTimeout(parent context.Context, raw string) (context.Context, context.CancelFunc) {
 	duration, err := time.ParseDuration(raw)
 	if err != nil || duration <= 0 {

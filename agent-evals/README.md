@@ -54,12 +54,15 @@ verify = ["php artisan test --filter=UserFilterTest", "vendor/bin/pint --test"]
 judge_prompt = """Additional evaluation instructions for the independent judge."""
 ```
 
-## Live telemetry
+## Managed engine and authoritative telemetry
 
-The TUI places a transparent local proxy between Pi and llama-hip for the coding-agent stage. It adds llama.cpp `return_progress` to streaming requests and reads server-sent `prompt_progress`, `gen_second`, and final timing data. Prompt throughput and **generation tok/s** therefore update while Pi performs tool loops, rather than only after the final response.
+At startup, Agent Evals starts `../start-llama-hip.sh` with `VERBOSITY=4`, owns that child process, and stops only that child when the TUI exits. It writes the raw llama.cpp output to `results/engine/`.
 
-### Metric semantics
+It does **not** guess throughput from API chunks and has no HTTP metrics proxy. It parses the actual llama.cpp timing lines instead:
 
-- **PP FRESH** is shown only when llama.cpp processes at least 16 non-cached prompt tokens. Cached prompt tokens are excluded, so a one-token cache continuation cannot appear as a misleading multi-thousand tok/s prefill result.
-- **CR** is the cache-reuse ratio for the current model request: cached prompt tokens divided by total prompt tokens.
-- **GEN 10S** is a rolling ten-second, time-weighted speed. It follows real slowdowns during generation and fades toward zero after generation stops instead of freezing on the final token speed.
+- **PP** is `prompt eval time` / `prompt processing` tokens per second.
+- **GEN 3S** is llama.cpp’s `tg_3s`, already its measured rolling three-second generation speed.
+- **CR** is cached tokens divided by cached plus fresh prompt tokens. Debug verbosity emits the cached-token count; final prompt timings emit fresh tokens.
+- **DA** is MTP draft acceptance from `draft acceptance`.
+
+If an engine is already listening on the configured port, Agent Evals leaves it untouched and marks it external. Stop that process, then relaunch the TUI, when managed logs are required.

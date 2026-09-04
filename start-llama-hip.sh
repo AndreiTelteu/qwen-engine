@@ -12,6 +12,7 @@ SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 : "${SPEC_DRAFT_N_MAX:=2}"
 : "${PORT:=8080}"
 : "${REASONING:=off}"
+: "${VERBOSITY:=3}"
 
 for required in "$SERVER" "$MODEL" "$DRAFT"; do
     if [ ! -e "$required" ]; then
@@ -24,6 +25,7 @@ done
 export LD_LIBRARY_PATH="$ENGINE_ROOT/build-hip/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 exec "$SERVER" \
+    --verbosity "$VERBOSITY" \
     --model "$MODEL" \
     --model-draft "$DRAFT" \
     --device ROCm0 \
