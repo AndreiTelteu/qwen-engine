@@ -177,7 +177,7 @@ func (p *Parser) Parse(line string) (Metrics, bool, string) {
 	task, hasTask := parseTask(line)
 	now := time.Now()
 	if hasTask && strings.Contains(line, "processing task") {
-		p.metrics.TaskID = task
+		p.metrics = Metrics{TaskID: task}
 		return p.snapshot(now), true, fmt.Sprintf("engine task %d started", task)
 	}
 	if hasTask && cachedPattern.MatchString(line) {
