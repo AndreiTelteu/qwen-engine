@@ -74,27 +74,36 @@ done
 
 export LD_LIBRARY_PATH="$ENGINE_ROOT/build-hip/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-exec "$SERVER" \
-    --verbosity "$VERBOSITY" \
-    --model "$MODEL" \
-    --model-draft "$DRAFT" \
-    --device ROCm0 \
-    --gpu-layers all \
-    --ctx-size "$CTX_SIZE" \
-    --cache-type-k q8_0 \
-    --cache-type-v "$CACHE_TYPE_V" \
-    --spec-type draft-mtp \
-    --spec-draft-n-max "$SPEC_DRAFT_N_MAX" \
-    --flash-attn "$FLASH_ATTN" \
-    --fit off \
-    --batch-size 2048 \
-    --ubatch-size "$UBATCH_SIZE" \
-    --parallel 1 \
-    "${jinja_args[@]}" \
-    --reasoning-format "$REASONING_FORMAT" \
-    --reasoning "$REASONING" \
-    "${mmap_args[@]}" \
-    --threads 16 \
-    --threads-batch 16 \
-    --host 127.0.0.1 \
+command=(
+    "$SERVER"
+    --verbosity "$VERBOSITY"
+    --model "$MODEL"
+    --model-draft "$DRAFT"
+    --device ROCm0
+    --gpu-layers all
+    --ctx-size "$CTX_SIZE"
+    --cache-type-k q8_0
+    --cache-type-v "$CACHE_TYPE_V"
+    --spec-type draft-mtp
+    --spec-draft-n-max "$SPEC_DRAFT_N_MAX"
+    --flash-attn "$FLASH_ATTN"
+    --fit off
+    --batch-size 2048
+    --ubatch-size "$UBATCH_SIZE"
+    --parallel 1
+    "${jinja_args[@]}"
+    --reasoning-format "$REASONING_FORMAT"
+    --reasoning "$REASONING"
+    "${mmap_args[@]}"
+    --threads 16
+    --threads-batch 16
+    --host 127.0.0.1
     --port "$PORT"
+)
+
+# %q makes this a pasteable Bash command, including paths with whitespace.
+printf 'Starting llama-server:\n  LD_LIBRARY_PATH=%q ' "$LD_LIBRARY_PATH" >&2
+printf '%q ' "${command[@]}" >&2
+printf '\n' >&2
+
+exec "${command[@]}"
