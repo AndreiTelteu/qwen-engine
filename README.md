@@ -57,6 +57,22 @@ reuse. Tune a run without editing the script:
 RUNS=5 WARMUP_RUNS=2 CTX_SIZE=32768 MAX_TOKENS=512 ./scripts/benchmark-llama-hip-flags.sh
 ```
 
+### Compare mmap with the required agent settings
+
+```bash
+./scripts/benchmark-llama-hip-mmap.sh
+```
+
+This test holds Flash Attention on, `-ub 2048`, Jinja on, `REASONING=auto`, and
+`--reasoning-format auto` for both cases. It compares only mmap on versus
+`--no-mmap`, alternates their startup order over two server rounds, and writes a
+separate raw/median/failures CSV set. Increase confidence with more alternating
+rounds:
+
+```bash
+SERVER_ROUNDS=4 RUNS=3 ./scripts/benchmark-llama-hip-mmap.sh
+```
+
 ## Engine maintenance
 
 ```bash
