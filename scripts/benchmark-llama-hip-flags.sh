@@ -23,7 +23,7 @@ PROMPT="Fă-mi în Python un calculator TUI care să meargă și cu mouse-ul."
 
 mkdir -p "$RESULTS_DIR" "$LOGS_DIR"
 printf '%s\n' \
-    "case,run,flash_attn,ubatch_size,jinja,reasoning_format,mmap,startup_s,prompt_tok_per_s,decode_tok_per_s,prompt_tokens,completion_tokens,draft_acceptance,accepted,drafted" \
+    "case,run,flash_attn,cache_type_v,ubatch_size,jinja,reasoning_format,mmap,startup_s,prompt_tok_per_s,decode_tok_per_s,prompt_tokens,completion_tokens,draft_acceptance,accepted,drafted" \
     > "$RESULTS"
 
 server_pid=""
@@ -59,7 +59,7 @@ wait_for_server() {
 }
 
 record_request() {
-    local case_name=$1 run=$2 flash_attn=$3 ubatch_size=$4 jinja=$5 reasoning_format=$6 mmap=$7
+    local case_name=$1 run=$2 flash_attn=$3 cache_type_v=$4 ubatch_size=$5 jinja=$6 reasoning_format=$7 mmap=$8
     local response="$RESULTS_DIR/flags-$RUN_ID-$case_name-$run.json"
 
     PROMPT="$PROMPT" MAX_TOKENS="$MAX_TOKENS" \
@@ -78,12 +78,12 @@ print(json.dumps({
 }))
 PY
 
-    python3 - "$case_name" "$run" "$flash_attn" "$ubatch_size" "$jinja" \
+    python3 - "$case_name" "$run" "$flash_attn" "$cache_type_v" "$ubatch_size" "$jinja" \
         "$reasoning_format" "$mmap" "$startup_seconds" "$response" >> "$RESULTS" <<'PY'
 import json
 import sys
 
-case_name, run, flash_attn, ubatch_size, jinja, reasoning_format, mmap, startup, response = sys.argv[1:]
+case_name, run, flash_attn, cache_type_v, ubatch_size, jinja, reasoning_format, mmap, startup, response = sys.argv[1:]
 payload = json.load(open(response, encoding="utf-8"))
 timings = payload["timings"]
 usage = payload.get("usage", {})
@@ -95,7 +95,7 @@ def number(name):
     return float(timings.get(name, 0))
 
 print(",".join(map(str, [
-    case_name, run, flash_attn, ubatch_size, jinja, reasoning_format, mmap,
+    case_name, run, flash_attn, cache_type_v, ubatch_size, jinja, reasoning_format, mmap,
     startup, f"{number('prompt_per_second'):.2f}",
     f"{number('predicted_per_second'):.2f}",
     usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0),
@@ -106,12 +106,15 @@ PY
 
 run_case() {
     local case_name=$1 flash_attn=$2 ubatch_size=$3 jinja=$4 reasoning_format=$5 mmap=$6
-    local run start_ms ready_ms startup_seconds
+    local run start_ms ready_ms startup_seconds cache_type_v=q8_0
+    if [ "$flash_attn" = "off" ]; then
+        cache_type_v=f16
+    fi
 
     current_log="$LOGS_DIR/flags-$RUN_ID-$case_name.log"
     start_ms="$(now_ms)"
     CTX_SIZE="$CTX_SIZE" PORT="$PORT" REASONING=off \
-        FLASH_ATTN="$flash_attn" UBATCH_SIZE="$ubatch_size" JINJA="$jinja" \
+        FLASH_ATTN="$flash_attn" CACHE_TYPE_V="$cache_type_v" UBATCH_SIZE="$ubatch_size" JINJA="$jinja" \
         REASONING_FORMAT="$reasoning_format" MMAP="$mmap" \
         "$START" > "$current_log" 2>&1 &
     server_pid=$!
@@ -125,12 +128,12 @@ PY
 
     # Exercise one request after startup to avoid timing one-time HIP setup.
     for run in $(seq 1 "$WARMUP_RUNS"); do
-        record_request "$case_name" "warmup-$run" "$flash_attn" "$ubatch_size" \
+        record_request "$case_name" "warmup-$run" "$flash_attn" "$cache_type_v" "$ubatch_size" \
             "$jinja" "$reasoning_format" "$mmap"
     done
 
     for run in $(seq 1 "$RUNS"); do
-        record_request "$case_name" "$run" "$flash_attn" "$ubatch_size" \
+        record_request "$case_name" "$run" "$flash_attn" "$cache_type_v" "$ubatch_size" \
             "$jinja" "$reasoning_format" "$mmap"
     done
     stop_server

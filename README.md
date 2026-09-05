@@ -30,7 +30,9 @@ FLASH_ATTN=off UBATCH_SIZE=2048 JINJA=on REASONING_FORMAT=auto MMAP=off ./start-
 `FLASH_ATTN` accepts `on`, `off`, or `auto` (`-fa`); `UBATCH_SIZE` sets `-ub`.
 `JINJA=on` enables `--jinja`, `REASONING_FORMAT` sets `--reasoning-format`, and
 `MMAP=off` adds `--no-mmap`. `REASONING` controls whether the model thinks;
-`REASONING_FORMAT` only controls how thought content is returned.
+`REASONING_FORMAT` only controls how thought content is returned. A quantized
+V-cache requires Flash Attention: the launcher automatically uses `f16` V-cache
+when `FLASH_ATTN=off` (or set `CACHE_TYPE_V=f16` explicitly).
 
 ## Compare llama.cpp flags
 
@@ -41,7 +43,8 @@ FLASH_ATTN=off UBATCH_SIZE=2048 JINJA=on REASONING_FORMAT=auto MMAP=off ./start-
 The script uses the fixed prompt `Fă-mi în Python un calculator TUI care să
 meargă și cu mouse-ul.` and starts a fresh server for every case. It compares a
 feature-off baseline, Flash Attention, `-ub` values 256/512/1024/2048, Jinja,
-`--reasoning-format auto`, `--no-mmap`, and all selected flags together.
+`--reasoning-format auto`, `--no-mmap`, and all selected flags together. The CSV
+records V-cache type because Flash Attention-off cases must use `f16` rather than Q8.
 
 It writes raw samples and a median summary under
 `artifacts/llama-hip/benchmarks/`. By default each case has one warm-up request

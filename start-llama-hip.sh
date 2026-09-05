@@ -19,6 +19,25 @@ SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 : "${REASONING_FORMAT:=auto}"
 : "${MMAP:=on}"
 
+# llama.cpp cannot load a quantized V cache without Flash Attention. Retain the
+# Q8 default for normal runs, but make the Flash Attention-off benchmark valid.
+if [ -z "${CACHE_TYPE_V:-}" ]; then
+    if [ "$FLASH_ATTN" = "off" ]; then
+        CACHE_TYPE_V=f16
+    else
+        CACHE_TYPE_V=q8_0
+    fi
+fi
+
+case "$FLASH_ATTN:$CACHE_TYPE_V" in
+    off:q* | off:iq* | off:tq*)
+        printf "A quantized V cache (%s) requires FLASH_ATTN to be on or auto.\n" \
+            "$CACHE_TYPE_V" >&2
+        printf "Use CACHE_TYPE_V=f16 when FLASH_ATTN=off.\n" >&2
+        exit 2
+        ;;
+esac
+
 case "$JINJA" in
     on)
         jinja_args=(--jinja)
@@ -63,7 +82,7 @@ exec "$SERVER" \
     --gpu-layers all \
     --ctx-size "$CTX_SIZE" \
     --cache-type-k q8_0 \
-    --cache-type-v q8_0 \
+    --cache-type-v "$CACHE_TYPE_V" \
     --spec-type draft-mtp \
     --spec-draft-n-max "$SPEC_DRAFT_N_MAX" \
     --flash-attn "$FLASH_ATTN" \
