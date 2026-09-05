@@ -42,9 +42,11 @@ when `FLASH_ATTN=off` (or set `CACHE_TYPE_V=f16` explicitly).
 
 The script uses the fixed prompt `Fă-mi în Python un calculator TUI care să
 meargă și cu mouse-ul.` and starts a fresh server for every case. It compares a
-feature-off baseline, Flash Attention, `-ub` values 256/512/1024/2048, Jinja,
-`--reasoning-format auto`, `--no-mmap`, and all selected flags together. The CSV
-records V-cache type because Flash Attention-off cases must use `f16` rather than Q8.
+current working baseline, Flash Attention off, `-ub` values 256/512/1024/2048,
+Jinja, `--reasoning-format none`, `--no-mmap`, and all selected flags together. The
+CSV records V-cache type because Flash Attention-off cases must use `f16` rather than
+Q8. A configuration that exceeds available VRAM is recorded in a separate failures
+CSV and does not stop the remaining cases.
 
 It writes raw samples and a median summary under
 `artifacts/llama-hip/benchmarks/`. By default each case has one warm-up request

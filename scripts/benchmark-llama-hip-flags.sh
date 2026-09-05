@@ -9,6 +9,7 @@ LOGS_DIR="${LOGS_DIR:-$ROOT/artifacts/llama-hip/logs}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
 RESULTS="$RESULTS_DIR/flags-$RUN_ID.csv"
 SUMMARY="$RESULTS_DIR/flags-$RUN_ID-summary.csv"
+FAILURES="$RESULTS_DIR/flags-$RUN_ID-failures.csv"
 
 : "${PORT:=8081}"
 : "${CTX_SIZE:=32768}"
@@ -25,6 +26,9 @@ mkdir -p "$RESULTS_DIR" "$LOGS_DIR"
 printf '%s\n' \
     "case,run,flash_attn,cache_type_v,ubatch_size,jinja,reasoning_format,mmap,startup_s,prompt_tok_per_s,decode_tok_per_s,prompt_tokens,completion_tokens,draft_acceptance,accepted,drafted" \
     > "$RESULTS"
+printf '%s\n' \
+    "case,flash_attn,cache_type_v,ubatch_size,jinja,reasoning_format,mmap,stage,log" \
+    > "$FAILURES"
 
 server_pid=""
 
@@ -47,15 +51,22 @@ wait_for_server() {
         if ! kill -0 "$server_pid" 2>/dev/null; then
             printf 'llama-server exited before becoming ready; log follows:\n' >&2
             cat "$current_log" >&2
-            exit 1
+            return 1
         fi
         if [ "$(date +%s)" -ge "$deadline" ]; then
             printf 'Timed out after %ss waiting for llama-server; log: %s\n' \
                 "$STARTUP_TIMEOUT_SECONDS" "$current_log" >&2
-            exit 1
+            return 1
         fi
         sleep 2
     done
+}
+
+record_failure() {
+    local case_name=$1 flash_attn=$2 cache_type_v=$3 ubatch_size=$4 jinja=$5 reasoning_format=$6 mmap=$7 stage=$8
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+        "$case_name" "$flash_attn" "$cache_type_v" "$ubatch_size" "$jinja" \
+        "$reasoning_format" "$mmap" "$stage" "$current_log" >> "$FAILURES"
 }
 
 record_request() {
@@ -118,7 +129,12 @@ run_case() {
         REASONING_FORMAT="$reasoning_format" MMAP="$mmap" \
         "$START" > "$current_log" 2>&1 &
     server_pid=$!
-    wait_for_server
+    if ! wait_for_server; then
+        record_failure "$case_name" "$flash_attn" "$cache_type_v" "$ubatch_size" \
+            "$jinja" "$reasoning_format" "$mmap" server_start
+        stop_server
+        return 0
+    fi
     ready_ms="$(now_ms)"
     startup_seconds="$(python3 - "$start_ms" "$ready_ms" <<'PY'
 import sys
@@ -128,27 +144,38 @@ PY
 
     # Exercise one request after startup to avoid timing one-time HIP setup.
     for run in $(seq 1 "$WARMUP_RUNS"); do
-        record_request "$case_name" "warmup-$run" "$flash_attn" "$cache_type_v" "$ubatch_size" \
-            "$jinja" "$reasoning_format" "$mmap"
+        if ! record_request "$case_name" "warmup-$run" "$flash_attn" "$cache_type_v" "$ubatch_size" \
+            "$jinja" "$reasoning_format" "$mmap"; then
+            record_failure "$case_name" "$flash_attn" "$cache_type_v" "$ubatch_size" \
+                "$jinja" "$reasoning_format" "$mmap" warmup_request
+            stop_server
+            return 0
+        fi
     done
 
     for run in $(seq 1 "$RUNS"); do
-        record_request "$case_name" "$run" "$flash_attn" "$cache_type_v" "$ubatch_size" \
-            "$jinja" "$reasoning_format" "$mmap"
+        if ! record_request "$case_name" "$run" "$flash_attn" "$cache_type_v" "$ubatch_size" \
+            "$jinja" "$reasoning_format" "$mmap"; then
+            record_failure "$case_name" "$flash_attn" "$cache_type_v" "$ubatch_size" \
+                "$jinja" "$reasoning_format" "$mmap" measured_request
+            stop_server
+            return 0
+        fi
     done
     stop_server
 }
 
-# Baseline turns off the tested features. Each following case changes precisely
-# one dimension, except `all-flags`, which represents the proposed full setup.
-run_case baseline off 512 off none on
-run_case flash-attn-on on 512 off none on
-run_case ubatch-256 off 256 off none on
-run_case ubatch-1024 off 1024 off none on
-run_case ubatch-2048 off 2048 off none on
-run_case jinja-on off 512 on none on
-run_case reasoning-format-auto off 512 off auto on
-run_case no-mmap off 512 off none off
+# The baseline is the known-good engine configuration. Each following case
+# changes one dimension. A case that exceeds available VRAM is logged and does
+# not prevent the remaining configurations from running.
+run_case baseline on 512 off auto on
+run_case flash-attn-off off 512 off auto on
+run_case ubatch-256 on 256 off auto on
+run_case ubatch-1024 on 1024 off auto on
+run_case ubatch-2048 on 2048 off auto on
+run_case jinja-on on 512 on auto on
+run_case reasoning-format-none on 512 off none on
+run_case no-mmap on 512 off auto off
 run_case all-flags on 2048 on auto off
 
 python3 - "$RESULTS" "$SUMMARY" <<'PY'
@@ -185,5 +212,9 @@ with open(summary, "w", newline="", encoding="utf-8") as destination:
         })
 PY
 
-printf '\nRaw samples: %s\nSummary: %s\n\n' "$RESULTS" "$SUMMARY"
+printf '\nRaw samples: %s\nSummary: %s\nFailures: %s\n\n' "$RESULTS" "$SUMMARY" "$FAILURES"
 column -s, -t < "$SUMMARY" 2>/dev/null || cat "$SUMMARY"
+if [ "$(wc -l < "$FAILURES")" -gt 1 ]; then
+    printf '\nConfigurations that did not fit or complete:\n'
+    column -s, -t < "$FAILURES" 2>/dev/null || cat "$FAILURES"
+fi
