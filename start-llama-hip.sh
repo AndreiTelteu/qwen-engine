@@ -13,6 +13,37 @@ SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 : "${PORT:=8080}"
 : "${REASONING:=auto}"
 : "${VERBOSITY:=3}"
+: "${FLASH_ATTN:=on}"
+: "${UBATCH_SIZE:=512}"
+: "${JINJA:=off}"
+: "${REASONING_FORMAT:=auto}"
+: "${MMAP:=on}"
+
+case "$JINJA" in
+    on)
+        jinja_args=(--jinja)
+        ;;
+    off)
+        jinja_args=()
+        ;;
+    *)
+        printf "JINJA must be 'on' or 'off', got: %s\n" "$JINJA" >&2
+        exit 2
+        ;;
+esac
+
+case "$MMAP" in
+    on)
+        mmap_args=()
+        ;;
+    off)
+        mmap_args=(--no-mmap)
+        ;;
+    *)
+        printf "MMAP must be 'on' or 'off', got: %s\n" "$MMAP" >&2
+        exit 2
+        ;;
+esac
 
 for required in "$SERVER" "$MODEL" "$DRAFT"; do
     if [ ! -e "$required" ]; then
@@ -35,12 +66,15 @@ exec "$SERVER" \
     --cache-type-v q8_0 \
     --spec-type draft-mtp \
     --spec-draft-n-max "$SPEC_DRAFT_N_MAX" \
-    --flash-attn on \
+    --flash-attn "$FLASH_ATTN" \
     --fit off \
     --batch-size 2048 \
-    --ubatch-size 512 \
+    --ubatch-size "$UBATCH_SIZE" \
     --parallel 1 \
+    "${jinja_args[@]}" \
+    --reasoning-format "$REASONING_FORMAT" \
     --reasoning "$REASONING" \
+    "${mmap_args[@]}" \
     --threads 16 \
     --threads-batch 16 \
     --host 127.0.0.1 \

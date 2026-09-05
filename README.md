@@ -22,6 +22,34 @@ Defaults: Qwen3.8-27B Q4_0 + its MTP draft model, ROCm0, 128K context, Q8 KV cac
 # Disable thinking only when maximum throughput matters more than quality.
 REASONING=off ./start-llama-hip.sh
 CTX_SIZE=32768 ./start-llama-hip.sh
+
+# Override the llama.cpp flags benchmarked below.
+FLASH_ATTN=off UBATCH_SIZE=2048 JINJA=on REASONING_FORMAT=auto MMAP=off ./start-llama-hip.sh
+```
+
+`FLASH_ATTN` accepts `on`, `off`, or `auto` (`-fa`); `UBATCH_SIZE` sets `-ub`.
+`JINJA=on` enables `--jinja`, `REASONING_FORMAT` sets `--reasoning-format`, and
+`MMAP=off` adds `--no-mmap`. `REASONING` controls whether the model thinks;
+`REASONING_FORMAT` only controls how thought content is returned.
+
+## Compare llama.cpp flags
+
+```bash
+./scripts/benchmark-llama-hip-flags.sh
+```
+
+The script uses the fixed prompt `Fă-mi în Python un calculator TUI care să
+meargă și cu mouse-ul.` and starts a fresh server for every case. It compares a
+feature-off baseline, Flash Attention, `-ub` values 256/512/1024/2048, Jinja,
+`--reasoning-format auto`, `--no-mmap`, and all selected flags together.
+
+It writes raw samples and a median summary under
+`artifacts/llama-hip/benchmarks/`. By default each case has one warm-up request
+and three measured requests; repeated prompts explicitly disable KV prompt-cache
+reuse. Tune a run without editing the script:
+
+```bash
+RUNS=5 WARMUP_RUNS=2 CTX_SIZE=32768 MAX_TOKENS=512 ./scripts/benchmark-llama-hip-flags.sh
 ```
 
 ## Engine maintenance
