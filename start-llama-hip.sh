@@ -9,7 +9,11 @@ DRAFT="$MODEL_DIR/MTP/mtp-Qwen3.8-27B-Q4_0.gguf"
 SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 
 : "${CTX_SIZE:=131072}"
+: "${SPEC_TYPE:=draft-mtp}"
 : "${SPEC_DRAFT_N_MAX:=2}"
+: "${SPEC_DRAFT_P_MIN:=}"
+: "${SPEC_NGRAM_MOD_N_MATCH:=}"
+: "${SPEC_NGRAM_MOD_N_MIN:=}"
 : "${PORT:=8080}"
 : "${REASONING:=auto}"
 : "${VERBOSITY:=3}"
@@ -74,6 +78,20 @@ done
 
 export LD_LIBRARY_PATH="$ENGINE_ROOT/build-hip/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+speculative_args=(
+    --spec-type "$SPEC_TYPE"
+    --spec-draft-n-max "$SPEC_DRAFT_N_MAX"
+)
+if [ -n "$SPEC_DRAFT_P_MIN" ]; then
+    speculative_args+=(--spec-draft-p-min "$SPEC_DRAFT_P_MIN")
+fi
+if [ -n "$SPEC_NGRAM_MOD_N_MATCH" ]; then
+    speculative_args+=(--spec-ngram-mod-n-match "$SPEC_NGRAM_MOD_N_MATCH")
+fi
+if [ -n "$SPEC_NGRAM_MOD_N_MIN" ]; then
+    speculative_args+=(--spec-ngram-mod-n-min "$SPEC_NGRAM_MOD_N_MIN")
+fi
+
 command=(
     "$SERVER"
     --verbosity "$VERBOSITY"
@@ -84,8 +102,7 @@ command=(
     --ctx-size "$CTX_SIZE"
     --cache-type-k q8_0
     --cache-type-v "$CACHE_TYPE_V"
-    --spec-type draft-mtp
-    --spec-draft-n-max "$SPEC_DRAFT_N_MAX"
+    "${speculative_args[@]}"
     --flash-attn "$FLASH_ATTN"
     --fit off
     --batch-size 2048

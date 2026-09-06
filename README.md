@@ -73,6 +73,28 @@ rounds:
 SERVER_ROUNDS=4 RUNS=3 ./scripts/benchmark-llama-hip-mmap.sh
 ```
 
+### Compare MTP with MTP + ngram-mod
+
+```bash
+./scripts/benchmark-llama-hip-speculative.sh
+```
+
+The baseline is the launcher's complete default configuration, including 128K
+context, Flash Attention, `-ub 2048`, Jinja, reasoning auto, and mmap. The
+experiment changes speculative decoding only:
+
+```text
+--spec-type draft-mtp,ngram-mod
+--spec-draft-p-min 0.82
+--spec-draft-n-max 5
+--spec-ngram-mod-n-match 24
+--spec-ngram-mod-n-min 8
+```
+
+It alternates profile order over two server rounds and reports native draft
+acceptance alongside prompt and decode throughput. Set `SERVER_ROUNDS=4` for a
+more stable median.
+
 ## Engine maintenance
 
 ```bash
