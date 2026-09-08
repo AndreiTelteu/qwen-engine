@@ -5,6 +5,7 @@ Local Qwen inference and reproducible coding-agent evaluations on an RX 7900 XTX
 ## Layout
 
 - `llama-hip/` — pinned upstream `llama.cpp` Git submodule, built with ROCm/HIP for `gfx1100`.
+- `llama-fork/` — pinned RDNA3/RX 7900 XTX optimized fork.
 - `start-llama-hip.sh` — the one foreground launcher for the local OpenAI-compatible server.
 - `scripts/` — model download, benchmark, rebuild, and explicit upstream update commands.
 - `agent-evals/` — the coding-agent evaluation TUI, TOML definitions, and isolated run machinery.
@@ -56,6 +57,58 @@ reuse. Tune a run without editing the script:
 ```bash
 RUNS=5 WARMUP_RUNS=2 CTX_SIZE=32768 MAX_TOKENS=512 ./scripts/benchmark-llama-hip-flags.sh
 ```
+
+## Run and compare the RDNA3 fork
+
+```bash
+./scripts/rebuild-llama-fork.sh
+./start-llama-fork.sh
+```
+
+The fork launcher defaults to the best overall tested profile: DFlash2 with
+draft depth 4. It otherwise follows the author's dense Qwen example: 50,144
+context, tensor split, Flash Attention, `-b 4096`, `-ub 1024`, Q8 KV cache,
+expert cache off, fit enabled, direct lazy loading, and the same
+sampling/reasoning values. This machine has one GPU, so `FIT_TARGET=2800` is
+the single-device equivalent of the first value in the author's
+`--fit-target 2800,2048`; dual-GPU AllReduce and P2P variables are
+intentionally not enabled.
+
+To switch back to adaptive MTP:
+
+```bash
+SPEC_TYPE=draft-mtp-adaptive \
+DRAFT=llama-hip/models/qwen3.8-27b-q4_0/MTP/mtp-Qwen3.8-27B-Q4_0.gguf \
+SPEC_DRAFT_N_MAX=4 ./start-llama-fork.sh
+```
+
+Run controlled no-speculation, fixed MTP, adaptive MTP, and DFlash2 depth 4 /
+trained block maximum comparisons on both prose and code:
+
+```bash
+./scripts/benchmark-llama-fork-speculators.sh
+```
+
+Results, server logs, and failures are written under
+`artifacts/llama-fork/`. Use more samples with `RUNS=5 WARMUP_RUNS=2`.
+
+Compare upstream and fork prompt processing with the author's PP8192 shape:
+
+```bash
+./scripts/benchmark-llama-fork-pp8192.sh
+```
+
+On this RX 7900 XTX, three PP8192 repetitions measured **935.15 +/- 58.69
+tok/s upstream** and **995.12 +/- 64.02 tok/s in the fork**: a 6.4% uplift,
+and 2.4% below the reported 1020 tok/s. One 256-token code sample measured
+32.81 tok/s without speculation, 72.60 tok/s with adaptive MTP, and 72.55
+tok/s with DFlash2 depth 4. Acceptance was 85.5% for MTP and 84.9% for
+DFlash2. The local target GGUF is Q4_0, not the author's reported Q4_K_M, so
+this is not yet a quantization-identical comparison. On a 512-token prose
+sample, adaptive MTP reached 51.47 tok/s and
+DFlash2 reached 55.40 tok/s, versus the reported 58-60 tok/s. These decode
+figures are smoke-test samples; use the scripts above for fresh-server,
+multi-sample medians.
 
 ### Compare mmap with the required agent settings
 

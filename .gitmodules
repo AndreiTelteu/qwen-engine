@@ -4,3 +4,6 @@
 [submodule "agent-evals/samples/laravel-users"]
 	path = agent-evals/samples/laravel-users
 	url = https://github.com/laravel/laravel.git
+[submodule "llama-fork"]
+	path = llama-fork
+	url = https://github.com/nasone32/llama.cpp-RDNA3-7900xtx-opt.git
