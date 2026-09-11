@@ -30,6 +30,9 @@ cmake --fresh -S "$ENGINE_ROOT" -B "$BUILD_DIR" -G Ninja \
     -DCMAKE_C_COMPILER="$ROCM_ROOT/lib/llvm/bin/clang" \
     -DCMAKE_CXX_COMPILER="$ROCM_ROOT/lib/llvm/bin/clang++" \
     -DCMAKE_HIP_COMPILER="$ROCM_ROOT/lib/llvm/bin/clang" \
+    -DCMAKE_HIP_COMPILER_ROCM_ROOT="$ROCM_ROOT" \
+    '-DCMAKE_HIP_COMPILE_OPTIONS_EXPLICIT_LANGUAGE=-x;hip' \
+    -DCMAKE_HIP_FLAGS_RELEASE=-O3 \
     -DCMAKE_HIP_FLAGS="-I$BUILD_DIR/rocm-include -mllvm --amdgpu-unroll-threshold-local=600" \
     -DGGML_HIP=ON \
     -DGGML_HIP_GRAPHS=ON \

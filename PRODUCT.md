@@ -24,7 +24,7 @@ It treats a local llama.cpp/HIP server as a manually controlled dependency while
 
 ## Operating Context
 
-Runs occur in WSL2. Working samples are Git submodules; each evaluation uses a disposable/reusable detached Git worktree. Pi operates non-interactively against a local OpenAI-compatible coding model and an optional external OpenAI-compatible judge.
+Runs occur on native Linux. Working samples are Git submodules; each evaluation uses a disposable/reusable detached Git worktree. Pi operates non-interactively against a local OpenAI-compatible coding model and an optional external OpenAI-compatible judge.
 
 ## Capabilities and Constraints
 

@@ -22,7 +22,7 @@ To update every submodule to the commit recorded by this repository:
 git submodule update --recursive
 ```
 
-Local Qwen inference and reproducible coding-agent evaluations on an RX 7900 XTX under WSL2.
+Local Qwen inference and reproducible coding-agent evaluations on an RX 7900 XTX under native Linux.
 
 ## Layout
 
@@ -50,8 +50,8 @@ one slot use the full context; two simultaneous slots share that capacity.
 The DFlash2 launchers keep the same Q4_0 target, 128K context, Q8 target KV,
 reasoning mode, and API. Both use the Q4_K_M DFlash2 controller with Q8 draft
 KV and `-ub 512`. The main launcher and `dflash-balanced` use draft depth 3;
-this is also the default for the Agent Evals Start button. `dflash-long` uses depth 7 and measured best with
-100K input tokens, but can be slower on short prompts. The normal model
+this is also the default for the Agent Evals Start button. Native measurements
+showed that depth 3 also beats depth 7 with 100K occupied tokens. The normal model
 download script installs and verifies the DFlash2 controller too.
 
 ```bash
@@ -106,21 +106,20 @@ RUNS=5 WARMUP_RUNS=2 CTX_SIZE=32768 MAX_TOKENS=512 ./scripts/benchmark-llama-hip
 ./start-llama-fork.sh
 ```
 
-The fork launcher defaults to adaptive MTP with draft depth 4 and a 150,000-token
-context, the largest tested size that fits this RX 7900 XTX. It uses tensor
-split, Flash Attention, `-b 4096`, `-ub 512`, Q8 target and draft KV caches,
-expert cache off, fit
-enabled, direct lazy loading, and the same sampling/reasoning values. This
-machine has one GPU, so `FIT_TARGET=2800` is the single-device equivalent of
-the first value in the author's `--fit-target 2800,2048`; dual-GPU AllReduce
-and P2P variables are intentionally not enabled.
+The fork launcher defaults to the fastest balanced native profile found on this
+RX 7900 XTX: Q4_0 target weights, the Q4_K_M DFlash2 controller, draft depth 3,
+`--spec-draft-p-min 0.20`, Q8 target KV, F16 draft KV, Flash Attention,
+`-b 2048`, `-ub 512`, a 128K context, one server slot, explicit ROCm0 placement,
+all model layers on the GPU, `split-mode=none`, and fit disabled. Restricting HIP
+to the discrete GPU prevents the integrated GPU from being included in tensor
+or AllReduce initialization.
 
-To switch back to DFlash2 with draft depth 4:
+To compare adaptive MTP explicitly:
 
 ```bash
-SPEC_TYPE=draft-dflash \
-DRAFT=llama-hip/models/qwen3.8-27b-q4_0/DFlash2/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \
-SPEC_DRAFT_N_MAX=4 ./start-llama-fork.sh
+SPEC_TYPE=draft-mtp-adaptive \
+DRAFT=llama-hip/models/qwen3.8-27b-q4_0/MTP/mtp-Qwen3.8-27B-Q4_0.gguf \
+SPEC_DRAFT_N_MAX=4 SPEC_DRAFT_P_MIN=0 DRAFT_CACHE_TYPE=f16 ./start-llama-fork.sh
 ```
 
 Run controlled no-speculation, fixed MTP, adaptive MTP, and DFlash2 depth 4 /
@@ -139,17 +138,43 @@ Compare upstream and fork prompt processing with the author's PP8192 shape:
 ./scripts/benchmark-llama-fork-pp8192.sh
 ```
 
-On this RX 7900 XTX, three PP8192 repetitions measured **935.15 +/- 58.69
-tok/s upstream** and **995.12 +/- 64.02 tok/s in the fork**: a 6.4% uplift,
-and 2.4% below the reported 1020 tok/s. One 256-token code sample measured
-32.81 tok/s without speculation, 72.60 tok/s with adaptive MTP, and 72.55
-tok/s with DFlash2 depth 4. Acceptance was 85.5% for MTP and 84.9% for
-DFlash2. The local target GGUF is Q4_0, not the author's reported Q4_K_M, so
-this is not yet a quantization-identical comparison. On a 512-token prose
-sample, adaptive MTP reached 51.47 tok/s and
-DFlash2 reached 55.40 tok/s, versus the reported 58-60 tok/s. These decode
-figures are smoke-test samples; use the scripts above for fresh-server,
-multi-sample medians.
+On native Linux, five PP8192 repetitions measured **923.18 +/- 1.69 tok/s
+upstream** and **951.54 +/- 0.61 tok/s in the fork**, a 3.1% fork uplift.
+
+The balanced fork DFlash2 profile was validated with three 512-token code runs
+at 128K capacity. Median code decode throughput was **62.62 tok/s**. The
+equivalent standard DFlash2 profile without the tuned probability threshold
+measured **56.35 tok/s**, so the optimized profile improved code throughput by
+11.1% while retaining Q8 target KV.
+
+With 100K occupied tokens, the fork measured **422.39 prompt tok/s and 31.28
+decode tok/s with Q8 target KV**. Q4 target KV increased those figures to
+**427.67 prompt tok/s and 33.77 decode tok/s**, but is retained only as an
+explicit quality/performance tradeoff. The native upstream Q8 profile remained
+faster at this length, at 456.81 prompt tok/s and 36.32 decode tok/s.
+
+### Fork context allocation ceiling
+
+An allocation-only sweep started a fresh optimized fork server at each 10K
+increment, without filling or processing the advertised context. A single
+19-token `ping` request was then used only to verify that each admitted server
+could perform inference:
+
+| Requested context | Startup/allocation | Minimal inference |
+| ---: | :---: | :---: |
+| 150K | pass | `pong` |
+| 160K | pass | `pong` |
+| 170K | pass | `pong` |
+| 180K | pass | `pong` |
+| **190K** | **pass** | **`pong`** |
+| 200K | fail twice | not run |
+
+The largest validated allocation is therefore **190K requested tokens**
+(190,208 cells after internal alignment). At 200K the target and draft contexts
+were created far enough to expose the limiting allocation, then ROCm failed to
+reserve a 549.17 MiB draft compute buffer. This is an allocation/startup ceiling,
+not proof that 190K occupied tokens can be processed reliably. The 128K launcher
+default intentionally retains operating headroom.
 
 ### Compare mmap with the required agent settings
 
@@ -204,9 +229,12 @@ more stable median.
 
 `update-llama-hip.sh` never silently updates at launch. It preserves reproducible benchmarks; after validating an update, commit the new Gitlink from this root repository.
 
-## Measured baseline
+## Native measured baseline
 
-At 32K context, MTP draft depth 2 measured 45.92 decode tok/s with 60.04% draft acceptance. The same setup served 128K capacity at 44.13 decode tok/s. Historical local output is under `artifacts/llama-hip/`.
+At 128K capacity, upstream DFlash2 depth 3 measured median code decode
+throughput of **63.05 tok/s** over three 512-token runs. Autoregressive code
+decode measured approximately **36.46 tok/s** in the screening run. Raw native
+output is under `artifacts/`.
 
 ## Agent evaluations
 

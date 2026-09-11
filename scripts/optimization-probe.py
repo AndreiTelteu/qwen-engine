@@ -66,8 +66,8 @@ def main():
     parser.add_argument('--admission-only', action='store_true')
     args = parser.parse_args()
     WINDOWS_HTTP = args.windows_http
-    if args.ctx < 102400:
-        parser.error('Experiments must retain at least 102400 context capacity')
+    if args.ctx < 100000:
+        parser.error('Experiments must retain at least 100000 context capacity')
     if '/' in args.name or args.name in ('.', '..'):
         parser.error('name must be a simple label')
     output = ROOT / 'artifacts/optimization-lab/results' / args.name
