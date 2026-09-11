@@ -1,12 +1,36 @@
 # Qwen engine workspace
 
+## Clone with submodules
+
+This workspace uses Git submodules for `llama-fork`, `llama-hip`, and the
+Laravel evaluation sample. Clone everything in one command:
+
+```bash
+git clone --recurse-submodules https://github.com/AndreiTelteu/qwen-engine.git
+```
+
+If you have already cloned the repository without submodules, initialize them
+afterward:
+
+```bash
+git submodule update --init --recursive
+```
+
+To update every submodule to the commit recorded by this repository:
+
+```bash
+git submodule update --recursive
+```
+
 Local Qwen inference and reproducible coding-agent evaluations on an RX 7900 XTX under WSL2.
 
 ## Layout
 
 - `llama-hip/` — pinned upstream `llama.cpp` Git submodule, built with ROCm/HIP for `gfx1100`.
 - `llama-fork/` — pinned RDNA3/RX 7900 XTX optimized fork.
-- `start-llama-hip.sh` — the one foreground launcher for the local OpenAI-compatible server.
+- `start-llama-hip.sh` — the default balanced DFlash2 launcher.
+- `start-llama-hip-mtp.sh` — the original MTP comparison profile.
+- `start-llama-hip-dflash-balanced.sh` / `start-llama-hip-dflash-long.sh` — tested RX 7900 XTX DFlash2 profiles.
 - `scripts/` — model download, benchmark, rebuild, and explicit upstream update commands.
 - `agent-evals/` — the coding-agent evaluation TUI, TOML definitions, and isolated run machinery.
 - `artifacts/` — local logs and benchmark output, deliberately excluded from Git.
@@ -17,7 +41,24 @@ Local Qwen inference and reproducible coding-agent evaluations on an RX 7900 XTX
 ./start-llama-hip.sh
 ```
 
-Defaults: Qwen3.8-27B Q4_0 + its MTP draft model, ROCm0, 128K context, Q8 KV cache, draft depth 2, Flash Attention on, `-ub 2048`, Jinja on, reasoning auto with `--reasoning-format auto`, mmap on, and `127.0.0.1:8080`.
+Defaults: Qwen3.8-27B Q4_0 + Q4_K_M DFlash2, ROCm0, a shared 128K unified KV
+pool, two server slots, Q8 target and draft KV caches, draft depth 3, Flash
+Attention on, `-ub 512`, Jinja on, reasoning auto with
+`--reasoning-format auto`, mmap on, and `127.0.0.1:8080`. The unified pool lets
+one slot use the full context; two simultaneous slots share that capacity.
+
+The DFlash2 launchers keep the same Q4_0 target, 128K context, Q8 target KV,
+reasoning mode, and API. Both use the Q4_K_M DFlash2 controller with Q8 draft
+KV and `-ub 512`. The main launcher and `dflash-balanced` use draft depth 3;
+this is also the default for the Agent Evals Start button. `dflash-long` uses depth 7 and measured best with
+100K input tokens, but can be slower on short prompts. The normal model
+download script installs and verifies the DFlash2 controller too.
+
+```bash
+./start-llama-hip-dflash-balanced.sh
+./start-llama-hip-dflash-long.sh
+./start-llama-hip-mtp.sh
+```
 
 ```bash
 # Disable thinking only when maximum throughput matters more than quality.
@@ -65,20 +106,20 @@ RUNS=5 WARMUP_RUNS=2 CTX_SIZE=32768 MAX_TOKENS=512 ./scripts/benchmark-llama-hip
 ./start-llama-fork.sh
 ```
 
-The fork launcher defaults to the best overall tested profile: DFlash2 with
-draft depth 4. It otherwise follows the author's dense Qwen example: 50,144
-context, tensor split, Flash Attention, `-b 4096`, `-ub 1024`, Q8 KV cache,
-expert cache off, fit enabled, direct lazy loading, and the same
-sampling/reasoning values. This machine has one GPU, so `FIT_TARGET=2800` is
-the single-device equivalent of the first value in the author's
-`--fit-target 2800,2048`; dual-GPU AllReduce and P2P variables are
-intentionally not enabled.
+The fork launcher defaults to adaptive MTP with draft depth 4 and a 150,000-token
+context, the largest tested size that fits this RX 7900 XTX. It uses tensor
+split, Flash Attention, `-b 4096`, `-ub 512`, Q8 target and draft KV caches,
+expert cache off, fit
+enabled, direct lazy loading, and the same sampling/reasoning values. This
+machine has one GPU, so `FIT_TARGET=2800` is the single-device equivalent of
+the first value in the author's `--fit-target 2800,2048`; dual-GPU AllReduce
+and P2P variables are intentionally not enabled.
 
-To switch back to adaptive MTP:
+To switch back to DFlash2 with draft depth 4:
 
 ```bash
-SPEC_TYPE=draft-mtp-adaptive \
-DRAFT=llama-hip/models/qwen3.8-27b-q4_0/MTP/mtp-Qwen3.8-27B-Q4_0.gguf \
+SPEC_TYPE=draft-dflash \
+DRAFT=llama-hip/models/qwen3.8-27b-q4_0/DFlash2/Qwen3.8-27B-DFlash2-Q4_K_M.gguf \
 SPEC_DRAFT_N_MAX=4 ./start-llama-fork.sh
 ```
 
@@ -169,11 +210,14 @@ At 32K context, MTP draft depth 2 measured 45.92 decode tok/s with 60.04% draft 
 
 ## Agent evaluations
 
-Start the inference engine in one terminal, then run the evaluation cockpit in another:
+Run the evaluation cockpit; its Start button uses the balanced profile by default:
 
 ```bash
-./start-llama-hip.sh
 cd agent-evals && cp .env.example .env && $EDITOR .env && ./run.sh
+
+# Select another managed launcher for this invocation.
+QWEN_ENGINE_PROFILE=dflash-long ./run.sh
+QWEN_ENGINE_PROFILE=baseline ./run.sh
 ```
 
 See [`agent-evals/README.md`](agent-evals/README.md) for TOML authoring, sample submodules, isolated worktrees, and live server telemetry.

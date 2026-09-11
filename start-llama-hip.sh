@@ -5,12 +5,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_ROOT="$ROOT/llama-hip"
 MODEL_DIR="$ENGINE_ROOT/models/qwen3.8-27b-q4_0"
 MODEL="$MODEL_DIR/Qwen3.8-27B-Q4_0.gguf"
-DRAFT="$MODEL_DIR/MTP/mtp-Qwen3.8-27B-Q4_0.gguf"
+: "${DRAFT:=$MODEL_DIR/DFlash2/Qwen3.8-27B-DFlash2-Q4_K_M.gguf}"
 SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 
 : "${CTX_SIZE:=131072}"
-: "${SPEC_TYPE:=draft-mtp}"
-: "${SPEC_DRAFT_N_MAX:=2}"
+: "${SPEC_TYPE:=draft-dflash}"
+: "${SPEC_DRAFT_N_MAX:=3}"
+: "${DRAFT_CACHE_TYPE:=q8_0}"
 : "${SPEC_DRAFT_P_MIN:=}"
 : "${SPEC_NGRAM_MOD_N_MATCH:=}"
 : "${SPEC_NGRAM_MOD_N_MIN:=}"
@@ -18,7 +19,8 @@ SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 : "${REASONING:=auto}"
 : "${VERBOSITY:=3}"
 : "${FLASH_ATTN:=on}"
-: "${UBATCH_SIZE:=2048}"
+: "${UBATCH_SIZE:=512}"
+: "${PARALLEL:=2}"
 : "${JINJA:=on}"
 : "${REASONING_FORMAT:=auto}"
 : "${MMAP:=on}"
@@ -91,6 +93,12 @@ fi
 if [ -n "$SPEC_NGRAM_MOD_N_MIN" ]; then
     speculative_args+=(--spec-ngram-mod-n-min "$SPEC_NGRAM_MOD_N_MIN")
 fi
+if [ -n "$DRAFT_CACHE_TYPE" ]; then
+    speculative_args+=(
+        --cache-type-k-draft "$DRAFT_CACHE_TYPE"
+        --cache-type-v-draft "$DRAFT_CACHE_TYPE"
+    )
+fi
 
 command=(
     "$SERVER"
@@ -107,7 +115,8 @@ command=(
     --fit off
     --batch-size 2048
     --ubatch-size "$UBATCH_SIZE"
-    --parallel 1
+    --parallel "$PARALLEL"
+    --kv-unified
     "${jinja_args[@]}"
     --reasoning-format "$REASONING_FORMAT"
     --reasoning "$REASONING"

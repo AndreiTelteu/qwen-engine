@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,11 +24,20 @@ type Metrics struct {
 	FreshPromptTokens   int
 	CachedPromptTokens  int
 	CacheRatio          float64
-	GenerationPerSecond float64 // llama.cpp tg_3s: its real rolling three-second value
+	GenerationPerSecond float64 // Most recent llama.cpp tg value.
+	GenerationActive    bool
+	GenerationHoldUntil time.Time
 	DraftAcceptance     float64
 	DraftAccepted       int
 	DraftGenerated      int
 	UpdatedAt           time.Time
+}
+
+// HasGenerationRate reports whether the last generation rate should remain in
+// the TUI. A completed request keeps its final rate visible briefly so it does
+// not disappear before it can be read.
+func (m Metrics) HasGenerationRate(now time.Time) bool {
+	return m.GenerationPerSecond > 0 && (m.GenerationActive || now.Before(m.GenerationHoldUntil))
 }
 
 type Event struct {
@@ -50,10 +60,6 @@ func New(workspaceRoot, baseURL string, emit func(Event)) *Manager {
 }
 
 func (m *Manager) Start(ctx context.Context) {
-	if Healthy(m.baseURL) {
-		m.emit(Event{Kind: "external", Detail: "Engine already listens on the configured port; it is external, so its logs cannot be managed here."})
-		return
-	}
 	endpoint, err := url.Parse(m.baseURL)
 	if err != nil {
 		m.emit(Event{Kind: "failed", Detail: "Invalid AGENT_BASE_URL: " + err.Error()})
@@ -63,7 +69,25 @@ func (m *Manager) Start(ctx context.Context) {
 	if port == "" {
 		port = "8080"
 	}
-	script := filepath.Join(m.workspaceRoot, "start-llama-hip.sh")
+	if PortInUse(endpoint.Hostname(), port) {
+		m.emit(Event{Kind: "external", Detail: "The configured AI port " + port + " is already occupied; no new llama.cpp process will be started."})
+		return
+	}
+	profile := strings.TrimSpace(os.Getenv("QWEN_ENGINE_PROFILE"))
+	launcher := "start-llama-hip.sh"
+	switch profile {
+	case "", "dflash-balanced":
+		profile = "dflash-balanced"
+	case "baseline", "mtp":
+		profile = "baseline"
+		launcher = "start-llama-hip-mtp.sh"
+	case "dflash-long":
+		launcher = "start-llama-hip-dflash-long.sh"
+	default:
+		m.emit(Event{Kind: "failed", Detail: "Unknown QWEN_ENGINE_PROFILE: " + profile})
+		return
+	}
+	script := filepath.Join(m.workspaceRoot, launcher)
 	logDir := filepath.Join(m.workspaceRoot, "agent-evals", "results", "engine")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		m.emit(Event{Kind: "failed", Detail: err.Error()})
@@ -92,7 +116,7 @@ func (m *Manager) Start(ctx context.Context) {
 	m.mu.Lock()
 	m.command = command
 	m.mu.Unlock()
-	m.emit(Event{Kind: "starting", Detail: "Starting managed llama-hip; loading model into ROCm."})
+	m.emit(Event{Kind: "starting", Detail: "Starting managed llama-hip (" + profile + "); loading model into ROCm."})
 	if err := command.Start(); err != nil {
 		m.emit(Event{Kind: "failed", Detail: "Start llama-hip: " + err.Error()})
 		return
@@ -131,6 +155,20 @@ func (m *Manager) Start(ctx context.Context) {
 		return
 	}
 	m.emit(Event{Kind: "stopped", Detail: "Managed llama-hip exited."})
+}
+
+// PortInUse detects any listener, including a llama.cpp instance that is still
+// loading and therefore returns HTTP 503 from /health.
+func PortInUse(host, port string) bool {
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), time.Second)
+	if err != nil {
+		return false
+	}
+	_ = connection.Close()
+	return true
 }
 
 func (m *Manager) Stop() {
@@ -214,8 +252,9 @@ func (p *Parser) Parse(line string) (Metrics, bool, string) {
 	}
 	if hasTask && generationPattern.MatchString(line) {
 		parts := generationPattern.FindStringSubmatch(line)
-		rolling, _ := strconv.ParseFloat(parts[3], 64)
-		p.metrics.TaskID, p.metrics.GenerationPerSecond = task, rolling
+		latest, _ := strconv.ParseFloat(parts[2], 64)
+		p.metrics.TaskID, p.metrics.GenerationPerSecond = task, latest
+		p.metrics.GenerationActive, p.metrics.GenerationHoldUntil = true, time.Time{}
 		return p.snapshot(now), true, ""
 	}
 	if hasTask && acceptancePattern.MatchString(line) {
@@ -227,7 +266,10 @@ func (p *Parser) Parse(line string) (Metrics, bool, string) {
 		return p.snapshot(now), true, fmt.Sprintf("task %d · MTP %.0f%% (%d/%d)", task, rate*100, accepted, generated)
 	}
 	if hasTask && strings.Contains(line, "stop processing") {
-		p.metrics.TaskID, p.metrics.GenerationPerSecond = task, 0
+		p.metrics.TaskID, p.metrics.GenerationActive = task, false
+		if p.metrics.GenerationPerSecond > 0 {
+			p.metrics.GenerationHoldUntil = now.Add(time.Second)
+		}
 		return p.snapshot(now), true, fmt.Sprintf("engine task %d completed", task)
 	}
 	return Metrics{}, false, ""

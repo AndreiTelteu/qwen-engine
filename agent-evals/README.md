@@ -1,12 +1,10 @@
 # Agent Evals
 
-A live, keyboard-first evaluation cockpit for coding agents. It never starts or stops llama.cpp: start the local engine yourself from the workspace root, then launch this TUI.
+A live, keyboard-first evaluation cockpit for coding agents. Its Start button
+manages the local llama.cpp process unless an engine already owns the configured
+port.
 
 ```bash
-cd ~/qwen-engine
-./start-llama-hip.sh
-
-# In a second terminal:
 cd ~/qwen-engine/agent-evals
 cp .env.example .env
 $EDITOR .env
@@ -56,7 +54,20 @@ judge_prompt = """Additional evaluation instructions for the independent judge."
 
 ## Managed engine and authoritative telemetry
 
-At startup, Agent Evals starts `../start-llama-hip.sh` with `VERBOSITY=4`, owns that child process, and stops only that child when the TUI exits. It writes the raw llama.cpp output to `results/engine/`.
+At startup, Agent Evals selects a managed launcher with
+`QWEN_ENGINE_PROFILE`. `./run.sh` defaults to `dflash-balanced`; alternatives
+are `dflash-long` and `baseline` (the original MTP profile):
+
+```bash
+QWEN_ENGINE_PROFILE=dflash-long ./run.sh
+QWEN_ENGINE_PROFILE=baseline ./run.sh
+```
+
+The TUI passes `VERBOSITY=4`, owns that child process, and stops only that child
+when the TUI exits. It writes raw llama.cpp output to `results/engine/`.
+If the configured AI TCP port is already occupied—even by a server that is
+still loading and returns HTTP 503—the TUI treats it as external and does not
+attempt to start another llama.cpp process.
 
 It does **not** guess throughput from API chunks and has no HTTP metrics proxy. It parses the actual llama.cpp timing lines instead:
 

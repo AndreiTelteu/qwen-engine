@@ -10,7 +10,7 @@ Midnight Mission Control is a compact operating surface for watching a coding ag
 - Structure: one restrained rounded hairline border per panel; no stacked cards.
 - Primary ink: cool near-white. Secondary text is blue-tinted slate rather than neutral gray.
 - Cyan identifies navigation, labels, and active operational state.
-- Electric lime is reserved for live **GENERATION TOK/S**, making the speed signal unmistakable at a glance.
+- Electric lime is reserved for the most recently logged **GENERATION TOK/S**, making the live speed signal unmistakable at a glance.
 - Amber describes manual attention or the engine being offline; red names a failed run and its recovery message.
 - Measurement values use tabular numeric rhythm where the terminal supports it; prose stays proportional.
 

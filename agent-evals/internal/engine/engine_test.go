@@ -1,6 +1,23 @@
 package engine
 
-import "testing"
+import (
+	"net"
+	"strconv"
+	"testing"
+)
+
+func TestPortInUseDetectsListener(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	if !PortInUse("127.0.0.1", strconv.Itoa(port)) {
+		t.Fatal("expected occupied port to be detected")
+	}
+}
 
 func TestParserUsesLlamaTimingLinesAsTheOnlyMetricSource(t *testing.T) {
 	parser := NewParser()
@@ -17,7 +34,7 @@ func TestParserUsesLlamaTimingLinesAsTheOnlyMetricSource(t *testing.T) {
 			metric = update
 		}
 	}
-	if metric.TaskID != 4034 || metric.GenerationPerSecond != 48.52 {
+	if metric.TaskID != 4034 || metric.GenerationPerSecond != 48.20 {
 		t.Fatalf("generation metric: %#v", metric)
 	}
 	if metric.PromptPerSecond != 415.45 || metric.FreshPromptTokens != 910 {
@@ -34,16 +51,23 @@ func TestParserUsesLlamaTimingLinesAsTheOnlyMetricSource(t *testing.T) {
 	}
 }
 
-func TestParserReadsLivePromptRateAndClearsGenerationWhenTaskEnds(t *testing.T) {
+func TestParserUsesLatestGenerationRateAndHoldsItBrieflyAfterTaskEnds(t *testing.T) {
 	parser := NewParser()
 	_, _, _ = parser.Parse("26.56.633.838 I slot launch_slot_: id 0 | task 4355 | processing task, is_child = 0")
-	metric, changed, _ := parser.Parse("26.58.775.010 I slot print_timing: id 0 | task 4355 | prompt processing, n_tokens = 2164, progress = 1.00, t = 3.03 s / 713.98 tokens per second")
+	metric, changed, _ := parser.Parse("26.57.000.000 I slot print_timing: id 0 | task 4355 | n_gen = 42, tg = 51.25 t/s, tg_3s = 48.52 t/s")
+	if !changed || metric.GenerationPerSecond != 51.25 || !metric.GenerationActive {
+		t.Fatalf("latest generation metric: %#v", metric)
+	}
+	metric, changed, _ = parser.Parse("26.58.775.010 I slot print_timing: id 0 | task 4355 | prompt processing, n_tokens = 2164, progress = 1.00, t = 3.03 s / 713.98 tokens per second")
 	if !changed || metric.PromptPerSecond != 713.98 || metric.FreshPromptTokens != 2164 {
 		t.Fatalf("live prompt metric: %#v", metric)
 	}
 	metric, changed, _ = parser.Parse("27.00.395.844 I slot release: id 0 | task 4355 | stop processing: n_tokens = 16138, truncated = 0")
-	if !changed || metric.GenerationPerSecond != 0 {
-		t.Fatalf("release metric: %#v", metric)
+	if !changed || metric.GenerationActive || !metric.HasGenerationRate(metric.UpdatedAt) {
+		t.Fatalf("release should retain the final generation metric: %#v", metric)
+	}
+	if metric.HasGenerationRate(metric.GenerationHoldUntil) {
+		t.Fatalf("generation metric should disappear after its hold: %#v", metric)
 	}
 }
 

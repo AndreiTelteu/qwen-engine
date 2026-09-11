@@ -66,6 +66,7 @@ type model struct {
 type engineStatus bool
 type refreshTick time.Time
 type engineTick time.Time
+type generationExpiryTick time.Time
 type editorDone struct{ err error }
 
 func New(root string, suite config.Suite, environment config.Environment) tea.Model {
@@ -173,13 +174,21 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.engineOnline = false
 			m.addLog(msg.Detail)
 		}
-		return m, waitEngine(m.engineEvents)
+		commands := []tea.Cmd{waitEngine(m.engineEvents)}
+		if msg.Metrics != nil && msg.Metrics.GenerationHoldUntil.After(time.Now()) {
+			commands = append(commands, refreshGenerationAt(msg.Metrics.GenerationHoldUntil))
+		}
+		return m, tea.Batch(commands...)
 	case engineStatus:
 		m.engineOnline = bool(msg)
 	case refreshTick:
 		return m, refresh()
 	case engineTick:
 		return m, tea.Batch(checkEngine(m.environment.Agent.BaseURL), refreshEngine())
+	case generationExpiryTick:
+		// The rate's visibility is derived from GenerationHoldUntil in header().
+		// This tick redraws at its exact expiry rather than waiting for the
+		// periodic status refresh.
 	case editorDone:
 		if msg.err != nil {
 			m.err = "editor: " + msg.err.Error()
@@ -259,9 +268,12 @@ func (m model) header() string {
 	if m.metrics.DraftGenerated > 0 {
 		draft = metric("MTP", fmt.Sprintf("%3.0f%%", m.metrics.DraftAcceptance*100), dimStyle)
 	}
-	generation := metric("GEN 3S", fmt.Sprintf("%6.1f TOK/S", m.metrics.GenerationPerSecond), hotStyle)
 	left := titleStyle.Render("AGENT EVALS") + dimStyle.Render("  /  mission control")
-	right := status + "   " + prompt + "   " + cache + "   " + draft + "   " + generation
+	metrics := []string{status, prompt, cache, draft}
+	if m.metrics.HasGenerationRate(time.Now()) {
+		metrics = append(metrics, metric("GEN", fmt.Sprintf("%6.1f tok/s", m.metrics.GenerationPerSecond), hotStyle))
+	}
+	right := strings.Join(metrics, "   ")
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 2 {
 		gap = 2
@@ -450,6 +462,13 @@ func refresh() tea.Cmd {
 }
 func refreshEngine() tea.Cmd {
 	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return engineTick(t) })
+}
+func refreshGenerationAt(at time.Time) tea.Cmd {
+	delay := time.Until(at)
+	if delay < 0 {
+		delay = 0
+	}
+	return tea.Tick(delay, func(t time.Time) tea.Msg { return generationExpiryTick(t) })
 }
 func checkEngine(base string) tea.Cmd {
 	return func() tea.Msg { return engineStatus(engineHealth(base)) }
