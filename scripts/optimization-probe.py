@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shlex
 import subprocess
 import time
 import urllib.error
@@ -84,7 +85,8 @@ def main():
         command += ['--model-draft', args.draft]
     if args.draft_kv:
         command += ['--cache-type-k-draft', args.draft_kv, '--cache-type-v-draft', args.draft_kv]
-    command += args.extra
+    for extra in args.extra:
+        command += shlex.split(extra)
     env = os.environ.copy()
     env['LD_LIBRARY_PATH'] = str(Path(args.server).parent) + ':' + env.get('LD_LIBRARY_PATH', '')
     for entry in args.env:
