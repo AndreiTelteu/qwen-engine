@@ -99,6 +99,49 @@ reuse. Tune a run without editing the script:
 RUNS=5 WARMUP_RUNS=2 CTX_SIZE=32768 MAX_TOKENS=512 ./scripts/benchmark-llama-hip-flags.sh
 ```
 
+## ByteShape ShapeLearn IQ4_XS (3.84 bpw)
+
+Download the 13,083,052,416-byte target GGUF from the pinned ByteShape revision
+with resumable downloads and SHA-256 verification:
+
+```bash
+./scripts/download-qwen3.8-27b-byteshape.sh
+MODEL_QUANT=byteshape ./start-llama-hip.sh
+MODEL_QUANT=byteshape ./start-llama-fork.sh
+MODEL_QUANT=byteshape ./start-llama-fork-dual.sh
+```
+
+All launchers retain Q4_0 as their default and accept an explicit `MODEL` path
+that overrides `MODEL_QUANT`. The ByteShape model lives in
+`llama-hip/models/qwen3.8-27b-byteshape/`; the existing standalone drafts remain
+in `qwen3.8-27b-q4_0`. Run the original download script if those drafts are missing.
+The embedded MTP head needs no standalone draft download:
+
+```bash
+MODEL_QUANT=byteshape SPEC_TYPE=draft-mtp DRAFT=embedded SPEC_DRAFT_N_MAX=3 ./start-llama-fork.sh
+MODEL_QUANT=byteshape SPEC_TYPE=none ./start-llama-fork.sh
+MODEL_QUANT=byteshape SPEC_DRAFT_N_MAX=7 ./start-llama-fork.sh
+```
+
+`DRAFT=embedded` also works in the HIP and dual launchers. Its MTP context shares
+the target model; dual draft-device placement should be confirmed from the logs
+rather than assumed to move the embedded head to the secondary GPU.
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/benchmark-qwen3.8-byteshape.py
+```
+
+The benchmark serializes HIP, single-GPU fork and dual fork with no speculation,
+standalone/embedded MTP depth 3, and DFlash2 depths 3/7. It also runs the Q4_0
+single-GPU DFlash2 baseline and separate checks of the launchers' native defaults.
+Controlled profiles use Q8 target KV, F16 draft KV, one slot, 131072 allocated
+context, reasoning auto/medium, one warmup and two requests per scenario,
+384 output tokens, temperature 0 and seed 3407. Short code and reasoning prompts
+are recorded with the raw responses, acceptance counts, server logs and per-GPU
+memory under `artifacts/byteshape/`. These runs test runtime behavior and throughput;
+they do not validate filled-context capacity or reproduce ByteShape's quality scores.
+Use `--profiles`, `--runs`, `--tokens` and `--ctx` for narrower follow-up experiments.
+
 ## Run and compare the RDNA3 fork
 
 ```bash
@@ -140,6 +183,49 @@ Compare upstream and fork prompt processing with the author's PP8192 shape:
 
 On native Linux, five PP8192 repetitions measured **923.18 +/- 1.69 tok/s
 upstream** and **951.54 +/- 0.61 tok/s in the fork**, a 3.1% fork uplift.
+
+## RDNA boosts release experiment
+
+`llama-rdna-boosts/` is a local clean checkout of upstream llama.cpp at
+`ebbb18522` with all 16 patches from release `v16-ebbb18522-r2` applied by the
+release's `scripts/apply-all.sh`. The applied Git tree is pinned by the release
+manifest to `7dc63cb3c93aa1cd74435698f045f93d2ee3a9e6`. The local checkout and build
+outputs are ignored; recreate, build, and launch the pinned profile with:
+
+```bash
+./scripts/setup-llama-rdna-boosts.sh
+./scripts/rebuild-llama-rdna-boosts.sh
+./start-llama-rdna-boosts.sh
+```
+
+The launcher uses the long-running coding defaults validated for this build:
+the ByteShape IQ4_XS target, DFlash2 depth 3, reasoning enabled, and medium
+reasoning effort. These are server defaults rather than per-request locks: an
+OpenAI-compatible chat request can override `reasoning_effort`, and
+`reasoning_effort: "none"` disables thinking for that request. Select the
+embedded MTP head carried by the ByteShape GGUF instead of the older standalone
+MTP draft:
+
+```bash
+MODEL_QUANT=byteshape SPEC_TYPE=draft-mtp DRAFT=embedded SPEC_DRAFT_N_MAX=3 \
+  ./start-llama-rdna-boosts.sh
+MODEL_QUANT=byteshape SPEC_TYPE=draft-mtp-adaptive DRAFT=embedded \
+  SPEC_DRAFT_N_MAX=12 ./start-llama-rdna-boosts.sh
+```
+
+Run the controlled comparison against the current fork+DFlash2 baseline:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/benchmark-rdna-boosts-byteshape.py
+```
+
+The matrix contains fork+DFlash2 depth 3, RDNA boosts+DFlash2 depth 3, RDNA
+boosts+embedded MTP depth 3, and RDNA boosts+embedded adaptive MTP ceiling 12.
+Defaults are two 2000-token code/prose runs per profile using the release's
+versioned long prompts at 131072 allocated context, Q8 target KV, F16 draft KV,
+reasoning off, fixed seed and greedy sampling. This meets the release's documented
+minimum useful MTP run length; its full four-axis protocol still recommends 3000
+tokens. Results and full provenance are stored under `artifacts/rdna-boosts/`.
 
 The balanced fork DFlash2 profile was validated with three 512-token code runs
 at 128K capacity. Median code decode throughput was **62.62 tok/s**. The

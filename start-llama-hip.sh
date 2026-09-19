@@ -4,9 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE_ROOT="$ROOT/llama-hip"
 MODEL_DIR="$ENGINE_ROOT/models/qwen3.8-27b-q4_0"
-MODEL="$MODEL_DIR/Qwen3.8-27B-Q4_0.gguf"
+source "$ROOT/scripts/qwen3.8-model-profile.sh"
 : "${DRAFT:=$MODEL_DIR/DFlash2/Qwen3.8-27B-DFlash2-Q4_K_M.gguf}"
-SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
+: "${SERVER:=$ENGINE_ROOT/build-hip/bin/llama-server}"
+: "${DEVICE:=ROCm0}"
+: "${DEVICE_DRAFT:=$DEVICE}"
+: "${CACHE_TYPE_K:=q8_0}"
 
 : "${CTX_SIZE:=131072}"
 : "${SPEC_TYPE:=draft-dflash}"
@@ -17,6 +20,7 @@ SERVER="$ENGINE_ROOT/build-hip/bin/llama-server"
 : "${SPEC_NGRAM_MOD_N_MIN:=}"
 : "${PORT:=8080}"
 : "${REASONING:=auto}"
+: "${REASONING_EFFORT:=medium}"
 : "${VERBOSITY:=3}"
 : "${FLASH_ATTN:=on}"
 : "${UBATCH_SIZE:=512}"
@@ -70,10 +74,14 @@ case "$MMAP" in
         ;;
 esac
 
-for required in "$SERVER" "$MODEL" "$DRAFT"; do
+required_files=("$SERVER" "$MODEL")
+if [ "$SPEC_TYPE" != "none" ] && [ "$DRAFT" != "embedded" ]; then
+    required_files+=("$DRAFT")
+fi
+for required in "${required_files[@]}"; do
     if [ ! -e "$required" ]; then
         printf "Missing required file: %s\\n" "$required" >&2
-        printf "Run scripts/rebuild-llama-hip.sh or scripts/download-qwen3.8-27b.sh.\\n" >&2
+        printf "Run scripts/rebuild-llama-hip.sh or scripts/download-qwen3.8-27b{,-byteshape}.sh.\\n" >&2
         exit 1
     fi
 done
@@ -100,15 +108,23 @@ if [ -n "$DRAFT_CACHE_TYPE" ]; then
     )
 fi
 
+draft_args=()
+if [ "$SPEC_TYPE" != "none" ]; then
+    draft_args=(--device-draft "$DEVICE_DRAFT")
+    if [ "$DRAFT" != "embedded" ]; then
+        draft_args+=(--model-draft "$DRAFT")
+    fi
+fi
+
 command=(
     "$SERVER"
     --verbosity "$VERBOSITY"
     --model "$MODEL"
-    --model-draft "$DRAFT"
-    --device ROCm0
+    "${draft_args[@]}"
+    --device "$DEVICE"
     --gpu-layers all
     --ctx-size "$CTX_SIZE"
-    --cache-type-k q8_0
+    --cache-type-k "$CACHE_TYPE_K"
     --cache-type-v "$CACHE_TYPE_V"
     "${speculative_args[@]}"
     --flash-attn "$FLASH_ATTN"
@@ -120,6 +136,7 @@ command=(
     "${jinja_args[@]}"
     --reasoning-format "$REASONING_FORMAT"
     --reasoning "$REASONING"
+    --reasoning-effort "$REASONING_EFFORT"
     "${mmap_args[@]}"
     --threads 16
     --threads-batch 16

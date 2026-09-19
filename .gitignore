@@ -7,6 +7,8 @@
 artifacts/
 llama-hip/build-*/
 llama-hip/models/qwen3.8-27b-q4_0/
+llama-hip/models/qwen3.8-27b-byteshape/
+llama-rdna-boosts/
 
 # Agent-evals runtime state
 agent-evals/bin/

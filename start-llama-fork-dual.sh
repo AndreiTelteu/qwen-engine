@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# MODEL_QUANT=byteshape selects IQ4_XS-3.84bpw through the common launcher.
+# Explicit MODEL overrides the quant profile; standalone drafts remain shared.
 : "${SERVER:=$ROOT/llama-fork/build-rocm-dual/bin/llama-server}"
 : "${HIP_VISIBLE_DEVICES:=0,1}"
 : "${DEVICE:=ROCm0}"

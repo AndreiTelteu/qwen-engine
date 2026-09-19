@@ -2,12 +2,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENGINE_ROOT="$ROOT/llama-fork"
+ENGINE_ROOT="$ROOT/llama-rdna-boosts"
 MODEL_DIR="$ROOT/llama-hip/models/qwen3.8-27b-q4_0"
 
+: "${MODEL_QUANT:=byteshape}"
 source "$ROOT/scripts/qwen3.8-model-profile.sh"
 : "${DRAFT:=$MODEL_DIR/DFlash2/Qwen3.8-27B-DFlash2-Q4_K_M.gguf}"
-: "${SERVER:=$ENGINE_ROOT/build-rocm-gfx1100-portable/bin/llama-server}"
+: "${SERVER:=$ENGINE_ROOT/build-rocm-gfx1100/bin/llama-server}"
 : "${ALIAS:=qwen3.8-27b}"
 : "${HOST:=0.0.0.0}"
 : "${PORT:=8080}"
@@ -22,7 +23,6 @@ source "$ROOT/scripts/qwen3.8-model-profile.sh"
 : "${FLASH_ATTN:=on}"
 : "${BATCH_SIZE:=2048}"
 : "${UBATCH_SIZE:=512}"
-: "${MOE_EXPERT_CACHE:=0}"
 : "${CACHE_TYPE_K:=q8_0}"
 : "${CACHE_TYPE_V:=q8_0}"
 : "${DRAFT_CACHE_TYPE:=f16}"
@@ -31,13 +31,13 @@ source "$ROOT/scripts/qwen3.8-model-profile.sh"
 : "${TOP_K:=20}"
 : "${MIN_P:=0.00}"
 : "${PRESENCE_PENALTY:=0.0}"
-: "${REASONING:=auto}"
+: "${REASONING:=on}"
 : "${REASONING_EFFORT:=medium}"
 : "${PARALLEL:=1}"
 : "${FIT:=off}"
 : "${FIT_TARGET:=2800}"
 : "${LOAD_MODE:=none}"
-: "${LAZY_MODE:=on-direct}"
+: "${LAZY_MODE:=on}"
 : "${HIP_VISIBLE_DEVICES:=0}"
 : "${GGML_CUDA_GDN_CHUNKED_BF16:=1}"
 
@@ -85,7 +85,6 @@ command=(
     --flash-attn "$FLASH_ATTN"
     --batch-size "$BATCH_SIZE"
     --ubatch-size "$UBATCH_SIZE"
-    --moe-expert-cache "$MOE_EXPERT_CACHE"
     --cache-type-k "$CACHE_TYPE_K"
     --cache-type-v "$CACHE_TYPE_V"
     --cache-type-k-draft "$DRAFT_CACHE_TYPE"
@@ -104,7 +103,7 @@ command=(
     --lazy-mode "$LAZY_MODE"
 )
 
-printf 'Starting fork llama-server:\n  ' >&2
+printf 'Starting RDNA boosts llama-server:\n  ' >&2
 printf 'HIP_VISIBLE_DEVICES=%q GGML_CUDA_GDN_CHUNKED_BF16=%q LD_LIBRARY_PATH=%q ' \
     "$HIP_VISIBLE_DEVICES" "$GGML_CUDA_GDN_CHUNKED_BF16" "$LD_LIBRARY_PATH" >&2
 printf '%q ' "${command[@]}" >&2
